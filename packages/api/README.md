@@ -104,7 +104,7 @@ resources are provisioned (RUNBOOK, Task 5).
 ```
 pnpm --filter @archive-api/fixture build
 node packages/fixture/dist/cli.js --out fixture-data/small --profile small
-pnpm --filter @archive-api/api fixture:load -- --db fixture-data/small/harness.sqlite \
+pnpm --filter @archive-api/api fixture:load --db fixture-data/small/harness.sqlite \
   --payloads fixture-data/small/payloads --out /tmp/d1-load
 # then, with your own wrangler login:
 wrangler d1 execute archive-index --remote --file /tmp/d1-load/schema.sql

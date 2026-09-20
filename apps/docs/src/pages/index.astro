@@ -1,0 +1,60 @@
+---
+import Console from '../components/Console.astro';
+import { API_URL, SITE_NAME, TAGLINE } from '../config/site';
+import { SOURCES } from '../config/sources';
+import Base from '../layouts/Base.astro';
+
+const demo = SOURCES.find((s) => s.openArchive);
+if (!demo) throw new Error('The landing console needs one open-archive source');
+---
+
+<Base title={SITE_NAME}>
+  <h1>{SITE_NAME}</h1>
+  <p class="lead">{TAGLINE}</p>
+  <p class="lead">
+    Public registries overwrite themselves. We capture them every day into an append-only archive and answer three questions
+    about any record: <strong>what it looked like on a date</strong>, <strong>what changed between two dates</strong>, and
+    <strong>when it appeared, changed and disappeared</strong>.
+  </p>
+
+  <h2>Try it — no signup</h2>
+  <p class="muted">
+    This runs against the live API using the <a href={`/sources/${demo.name}/`}>{demo.title}</a>, whose whole archive is
+    open. Anonymous callers get 100 calls a month per address; the meter is in the response headers.
+  </p>
+  <Console source={demo} />
+
+  <h2>Three endpoints</h2>
+  <div class="grid">
+    <div class="card">
+      <h3><code>GET /v1/&lbrace;source&rbrace;/asof</code></h3>
+      <p>The record as it stood on a date. <code>resolution</code> is <code>exact</code>, <code>carried_forward</code> (the
+        nearest earlier capture, flagged), <code>absent</code> (captured, record not there) or <code>unknown_gap</code> (no
+        capture — we say so rather than guess).</p>
+    </div>
+    <div class="card">
+      <h3><code>GET /v1/&lbrace;source&rbrace;/diff</code></h3>
+      <p>Added, removed, mutated and aged-out records between two dates, cursor-paginated, with before/after hashes and
+        optional payloads.</p>
+    </div>
+    <div class="card">
+      <h3><code>GET /v1/&lbrace;source&rbrace;/history</code></h3>
+      <p>First seen, every content change, last seen, gaps in coverage, and whether the key was reused for a different
+        entity.</p>
+    </div>
+  </div>
+  <p><a href="/docs/">Full endpoint reference →</a></p>
+
+  <h2>What you can rely on</h2>
+  <ul>
+    <li><strong>Provenance on every answer.</strong> Source, upstream URL, capture timestamp, SHA-256 of the raw snapshot and its position in the hash chain.</li>
+    <li><strong>No invented state.</strong> A missing capture is reported as a gap. Nothing is interpolated or silently carried forward.</li>
+    <li><strong>Append-only.</strong> The API never writes to the archive; historical answers are served with immutable cache headers because they cannot change.</li>
+    <li><strong>Structured errors.</strong> RFC 9457 <code>application/problem+json</code> with a stable <code>code</code>; a free-tier request past its 90-day window gets a 402 that names the limit and the upgrade path.</li>
+  </ul>
+
+  <h2>Plans</h2>
+  <p>Free: 1,000 calls a month, 90 days back. Indie ($29/mo) and Team ($149/mo) see the full archive. <a href="/pricing/">Pricing →</a></p>
+
+  <p class="muted">API base <code>{API_URL}</code> · <a href={`${API_URL}/health`}>health</a> · <a href={`${API_URL}/v1/sources`}>sources</a></p>
+</Base>

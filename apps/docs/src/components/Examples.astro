@@ -1,0 +1,52 @@
+---
+/** Copy-paste curl / Python / JavaScript for one request. Values are real fixture values. */
+import { API_URL } from '../config/site';
+
+interface Props {
+  path: string;
+  params: Record<string, string>;
+  /** Show the Authorization header. Omit for the open fixture source. */
+  withKey?: boolean;
+}
+const { path, params, withKey = false } = Astro.props;
+const qs = new URLSearchParams(params).toString();
+const url = `${API_URL}${path}?${qs}`;
+const shellUrl = url.replace(/'/g, "'\\''");
+
+const curl = withKey
+  ? `curl -sS -H 'Authorization: Bearer ak_live_…' \\\n  '${shellUrl}' | jq .`
+  : `curl -sS '${shellUrl}' | jq .`;
+
+const py = [
+  'import requests',
+  '',
+  `r = requests.get(`,
+  `    "${API_URL}${path}",`,
+  `    params=${JSON.stringify(params, null, 4).replace(/\n/g, '\n    ')},`,
+  ...(withKey ? ['    headers={"Authorization": "Bearer ak_live_…"},'] : []),
+  ')',
+  'r.raise_for_status()  # 402 = outside your plan\'s lookback; the body says what to do',
+  'body = r.json()',
+  'print(body["provenance"])',
+].join('\n');
+
+const js = [
+  `const url = new URL("${API_URL}${path}");`,
+  `url.search = new URLSearchParams(${JSON.stringify(params)}).toString();`,
+  withKey
+    ? 'const res = await fetch(url, { headers: { authorization: "Bearer ak_live_…" } });'
+    : 'const res = await fetch(url);',
+  'if (!res.ok) throw new Error(`${res.status} ${(await res.json()).detail}`);',
+  'const body = await res.json();',
+  'console.log(body.provenance);',
+].join('\n');
+---
+
+<div class="examples">
+  <h3>curl</h3>
+  <pre><code>{curl}</code></pre>
+  <h3>Python</h3>
+  <pre><code>{py}</code></pre>
+  <h3>JavaScript</h3>
+  <pre><code>{js}</code></pre>
+</div>

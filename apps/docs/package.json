@@ -1,0 +1,29 @@
+{
+  "name": "@archive-api/docs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static docs site: landing page with a live fixture-backed console, one page per configured source, pricing. Deployed to Cloudflare Pages.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build && node --experimental-strip-types scripts/check-canonical.ts dist",
+    "preview": "astro preview",
+    "typecheck": "astro check && tsc --noEmit -p tsconfig.tests.json",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "astro": "7.3.2"
+  },
+  "devDependencies": {
+    "@archive-api/fixture": "workspace:*",
+    "@astrojs/check": "0.9.10",
+    "@types/node": "22.19.11",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "5.7.2",
+    "vitest": "4.1.11"
+  }
+}

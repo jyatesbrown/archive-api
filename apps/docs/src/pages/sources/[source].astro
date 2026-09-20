@@ -1,0 +1,41 @@
+---
+import Console from '../../components/Console.astro';
+import Examples from '../../components/Examples.astro';
+import { API_URL } from '../../config/site';
+import { SOURCES, type SourceDoc } from '../../config/sources';
+import Base from '../../layouts/Base.astro';
+
+export function getStaticPaths() {
+  return SOURCES.map((s) => ({ params: { source: s.name }, props: { source: s } }));
+}
+
+interface Props {
+  source: SourceDoc;
+}
+const { source } = Astro.props;
+const s = source.sample;
+---
+
+<Base title={source.title} description={source.summary}>
+  <h1><code>{source.name}</code></h1>
+  <p class="lead">{source.title} {source.openArchive && <span class="badge">open archive</span>}</p>
+  <p>{source.summary}</p>
+  <table>
+    <tr><th>Upstream</th><td><a href={source.upstreamUrl} rel="nofollow">{source.upstreamUrl}</a></td></tr>
+    <tr><th>Publisher window</th><td>{source.windowDays === null ? 'none — records stay until deleted' : `${source.windowDays} days; records that drop out are reported as aged_out, not removed`}</td></tr>
+    <tr><th>Entity fields</th><td><code>{source.entityFields.join(', ')}</code> — fields that identify the real-world entity; a key whose entity fields change is flagged <code>reused</code>.</td></tr>
+    <tr><th>Lookback</th><td>{source.openArchive ? 'Whole archive open to every tier, including anonymous. Metering still applies.' : 'By tier: 90 days on free/anonymous, full archive on paid plans.'}</td></tr>
+    <tr><th>Live status</th><td><a href={`${API_URL}/v1/sources`}><code>/v1/sources</code></a></td></tr>
+  </table>
+
+  <h2>Try it</h2>
+  <Console source={source} id={`console-${source.name}`} />
+
+  <h2>Examples</h2>
+  <h3>Record on a date</h3>
+  <Examples path={`/v1/${source.name}/asof`} params={{ key: s.key, date: s.date }} withKey={!source.openArchive} />
+  <h3>What changed</h3>
+  <Examples path={`/v1/${source.name}/diff`} params={{ from: s.from, to: s.to, limit: '20' }} withKey={!source.openArchive} />
+  <h3>Lifetime of a key</h3>
+  <Examples path={`/v1/${source.name}/history`} params={{ key: s.key }} withKey={!source.openArchive} />
+</Base>

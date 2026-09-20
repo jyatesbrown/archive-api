@@ -1,0 +1,84 @@
+---
+import Examples from '../../components/Examples.astro';
+import { API_URL } from '../../config/site';
+import { SOURCES } from '../../config/sources';
+import Base from '../../layouts/Base.astro';
+
+const demo = SOURCES.find((s) => s.openArchive) ?? SOURCES[0];
+if (!demo) throw new Error('No sources configured');
+const s = demo.sample;
+---
+
+<Base title="Endpoints" description="asof, diff, history, sources and health: parameters, response shape, errors, auth, caching.">
+  <h1>Endpoints</h1>
+  <p class="lead">Base URL <code>{API_URL}</code>. All endpoints are <code>GET</code> (and <code>HEAD</code>) and return JSON. Dates are <code>YYYY-MM-DD</code>, UTC.</p>
+
+  <h2 id="auth">Authentication</h2>
+  <p>Send your key as <code>Authorization: Bearer ak_live_…</code> or <code>x-api-key: ak_live_…</code>. Requests without a key are served on the anonymous tier (100 calls/month per address, 90-day lookback). A malformed, unknown or revoked key is a <code>401 invalid_key</code>, never a silent downgrade.</p>
+  <p>Every metered response carries <code>x-tier</code>, <code>x-ratelimit-limit</code>, <code>x-ratelimit-used</code>, <code>x-ratelimit-remaining</code> and, once past your allowance, <code>x-overage-calls</code>. Paid tiers are never cut off: overage is recorded at $1 per 1,000 calls.</p>
+
+  <h2 id="lookback">Lookback</h2>
+  <p>Free and anonymous callers may query the last 90 calendar days. An <code>asof</code> or <code>diff</code> request for an earlier date is refused with <code>402 lookback_exceeded</code> <em>before</em> any data is read:</p>
+  <pre><code>{`HTTP/1.1 402
+content-type: application/problem+json
+
+{
+  "type": "https://archive-api.dev/problems/lookback_exceeded",
+  "title": "Requested date is outside your plan's lookback window",
+  "status": 402,
+  "code": "lookback_exceeded",
+  "parameter": "date",
+  "requested": "2024-11-03",
+  "tier": "free",
+  "lookback_days": 90,
+  "earliest_allowed": "2025-06-22",
+  "upgrade": { "tier": "indie", "checkoutUrl": null, "pricingUrl": "${API_URL.replace('api.', '')}/pricing" }
+}`}</code></pre>
+  <p><code>history</code> has no date parameter, so it is truncated to the window instead; the body's <code>lookback</code> object says <code>limited: true</code>, the <code>earliest_allowed</code> date and how many transitions were omitted. Sources marked <em>open archive</em> (sample data) are exempt.</p>
+
+  <h2><code>GET /v1/&lbrace;source&rbrace;/asof?key=&lbrace;k&rbrace;&amp;date=&lbrace;d&rbrace;</code></h2>
+  <p>The record identified by <code>key</code> as it stood on <code>date</code>.</p>
+  <table>
+    <tr><th><code>resolution</code></th><th>meaning</th></tr>
+    <tr><td><code>exact</code></td><td>A capture on <code>date</code> contains the record.</td></tr>
+    <tr><td><code>carried_forward</code></td><td>No capture on <code>date</code>; the answer is from the nearest earlier capture, named in <code>capture</code>. Never presented as exact.</td></tr>
+    <tr><td><code>absent</code></td><td>A capture exists (on or before the date) and the record is not in it.</td></tr>
+    <tr><td><code>unknown_gap</code></td><td>The date falls in a stretch with no usable capture at all. <code>gap</code> gives the bounds.</td></tr>
+  </table>
+  <p>A date before the first capture is <code>422 no_capture</code> with <code>nearest_after</code>. Answers inside the archive are immutable and cached as such.</p>
+  <Examples path={`/v1/${demo.name}/asof`} params={{ key: s.key, date: s.date }} />
+
+  <h2><code>GET /v1/&lbrace;source&rbrace;/diff?from=&lbrace;d1&rbrace;&amp;to=&lbrace;d2&rbrace;</code></h2>
+  <p>Records <code>added</code>, <code>removed</code>, <code>mutated</code> and <code>aged_out</code> (dropped by the publisher's own window rather than deleted) between the captures on the two dates. Pages of <code>limit</code> entries (default 100, max 1000) are walked with the opaque <code>next_cursor</code> / <code>next_url</code>; there is no offset parameter. Add <code>include=payload</code> to inline the raw records.</p>
+  <Examples path={`/v1/${demo.name}/diff`} params={{ from: s.from, to: s.to, limit: '20' }} />
+
+  <h2><code>GET /v1/&lbrace;source&rbrace;/history?key=&lbrace;k&rbrace;</code></h2>
+  <p><code>firstSeen</code>, <code>lastSeen</code>, <code>status</code> (<code>present</code>, <code>removed</code>, <code>aged_out</code>), every <code>transitions[]</code> entry with before/after hashes, <code>gaps[]</code> (both <em>absent</em> and <em>no capture</em>, distinguished), and <code>reused</code> with <code>reuseEvidence[]</code> when the same key later identified a different entity.</p>
+  <Examples path={`/v1/${demo.name}/history`} params={{ key: s.key }} />
+
+  <h2><code>GET /v1/sources</code></h2>
+  <p>Every configured source with its upstream URL, publisher window, capture counts and first/last capture dates.</p>
+  <pre><code>{`curl -sS ${API_URL}/v1/sources | jq .`}</code></pre>
+
+  <h2><code>GET /health</code></h2>
+  <p>Unauthenticated, unmetered. <code>{`{ "status": "ok", "version": "…", "sources": N, "time": "…" }`}</code>.</p>
+
+  <h2 id="provenance">Provenance</h2>
+  <p>Every 200 body has <code>provenance.source</code> (<code>id</code>, <code>name</code>, <code>upstreamUrl</code>) and <code>provenance.captures[]</code>, one per capture that contributed: <code>date</code>, <code>fetchedAt</code>, <code>contentHash</code> (SHA-256 of the raw snapshot), <code>prevHash</code>, <code>chainIndex</code>, <code>rawPath</code>. The chain lets you verify that no snapshot between two captures was altered or dropped.</p>
+
+  <h2 id="errors">Errors</h2>
+  <p>RFC 9457 <code>application/problem+json</code>, also echoed in <code>x-problem-code</code>.</p>
+  <table>
+    <tr><th>status</th><th><code>code</code></th><th>when</th></tr>
+    <tr><td>400</td><td><code>missing_parameter</code>, <code>invalid_parameter</code>, <code>invalid_cursor</code></td><td>Bad input; <code>parameter</code> names it.</td></tr>
+    <tr><td>401</td><td><code>invalid_key</code></td><td>Malformed, unknown or revoked key.</td></tr>
+    <tr><td>402</td><td><code>lookback_exceeded</code></td><td>Date outside the plan's window; body carries the upgrade path.</td></tr>
+    <tr><td>404</td><td><code>unknown_source</code>, <code>not_found</code></td><td>No such source / endpoint.</td></tr>
+    <tr><td>422</td><td><code>no_capture</code></td><td>No capture can answer for that date; <code>nearest_before</code>/<code>nearest_after</code> given.</td></tr>
+    <tr><td>429</td><td><code>quota_exhausted</code></td><td>Anonymous monthly allowance used up. Keys are never blocked.</td></tr>
+    <tr><td>500</td><td><code>internal</code></td><td>Quote <code>x-request-id</code> when reporting.</td></tr>
+  </table>
+
+  <h2 id="caching">Caching</h2>
+  <p>Responses are cached by source, endpoint and every query parameter — never by caller — so all users share one warm cache. <code>x-cache: HIT|MISS</code> tells you which. Answers entirely in the past carry <code>cache-control: public, max-age=31536000, immutable</code>; anything that can still change (today's state, <code>history</code>, <code>sources</code>) is cached briefly.</p>
+</Base>

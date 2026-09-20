@@ -14,7 +14,7 @@
  * your own wrangler credentials (see RUNBOOK.md).
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { parseArgs } from 'node:util';
 
@@ -63,11 +63,21 @@ writeFileSync(join(out, 'schema.sql'), SCHEMA.trimStart());
 type Row = Record<string, string | number | null>;
 const lit = (v: string | number | null): string => (v === null ? 'NULL' : typeof v === 'number' ? String(v) : `'${v.replaceAll("'", "''")}'`);
 
+/** D1 rejects statements over ~100 KB (SQLITE_TOOBIG); keep each INSERT well under that. */
+const ROWS_PER_STATEMENT = 400;
+
 function insertsFor(table: string, rows: Row[]): string {
   if (rows.length === 0) return '';
   const cols = Object.keys(rows[0] as Row);
-  const vals = rows.map((r) => `(${cols.map((c) => lit(r[c] ?? null)).join(',')})`).join(',\n');
-  return `INSERT OR IGNORE INTO ${table} (${cols.join(',')}) VALUES\n${vals};\n`;
+  let sql = '';
+  for (let i = 0; i < rows.length; i += ROWS_PER_STATEMENT) {
+    const vals = rows
+      .slice(i, i + ROWS_PER_STATEMENT)
+      .map((r) => `(${cols.map((c) => lit(r[c] ?? null)).join(',')})`)
+      .join(',\n');
+    sql += `INSERT OR IGNORE INTO ${table} (${cols.join(',')}) VALUES\n${vals};\n`;
+  }
+  return sql;
 }
 
 const sourceFilter = values.source ? ' WHERE name = ?' : '';
@@ -103,15 +113,23 @@ for (const id of snapIds) {
 }
 if (pending.length > 0) emit(insertsFor('record_index', pending));
 
-const lines = ['#!/usr/bin/env bash', 'set -euo pipefail', `BUCKET="\${BUCKET:-${values.bucket}}"`, `ROOT="${values.payloads}"`, ''];
+const lines = [
+  '#!/usr/bin/env bash',
+  'set -euo pipefail',
+  '# BUCKET overrides the bucket; WRANGLER_FLAGS="--local" targets the wrangler dev store.',
+  `BUCKET="\${BUCKET:-${values.bucket}}"`,
+  `ROOT="${resolve(values.payloads)}"`,
+  'FLAGS="${WRANGLER_FLAGS:-}"',
+  '',
+];
 for (const s of snapshots) {
   const rp = s['raw_path'];
   if (typeof rp !== 'string') continue;
-  lines.push(`wrangler r2 object put "$BUCKET/${values.prefix}${rp}" --file "$ROOT/${rp}" --content-type application/json`);
+  lines.push(`wrangler r2 object put $FLAGS "$BUCKET/${values.prefix}${rp}" --file "$ROOT/${rp}" --content-type application/json`);
 }
 writeFileSync(join(out, 'upload-payloads.sh'), `${lines.join('\n')}\n`, { mode: 0o755 });
 
 process.stdout.write(
-  `${sources.length} source(s), ${snapshots.length} snapshot(s), ${fileNo} SQL file(s), ${lines.length - 5} payload upload(s) -> ${out}\n`,
+  `${sources.length} source(s), ${snapshots.length} snapshot(s), ${fileNo} SQL file(s), ${lines.length - 7} payload upload(s) -> ${out}\n`,
 );
 db.close();

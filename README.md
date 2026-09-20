@@ -13,6 +13,11 @@ against a synthetic fixture before it is pointed at a real source.
 ```
 packages/
   fixture/   Task 1 — deterministic synthetic source in the harness's on-disk layout
+  engine/    Task 2 — pure asOf / diff / history over a capture index (no I/O)
+  api/       Task 3+4 — Cloudflare Worker: routes, caching, keys, metering, billing
+apps/
+  docs/      Task 5 — Astro static docs + live console, one page per source (Cloudflare Pages)
+RUNBOOK.md   deploy, key rotation, adding a source, failed-capture response
 ```
 
 ## Development

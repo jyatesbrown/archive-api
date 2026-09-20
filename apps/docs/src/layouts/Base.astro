@@ -1,0 +1,59 @@
+---
+import '../styles/global.css';
+
+import { API_URL, SITE_NAME, TAGLINE } from '../config/site';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description = TAGLINE } = Astro.props;
+
+if (!Astro.site) throw new Error('astro.config `site` must be set: canonical URLs depend on it');
+if (!Astro.url.pathname.endsWith('/')) {
+  throw new Error(`Route ${Astro.url.pathname} does not end in "/"; trailingSlash is "always"`);
+}
+// The one URL this page answers to. `check-canonical` asserts the built file agrees.
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+
+const nav = [
+  ['/docs/', 'Endpoints'],
+  ['/sources/', 'Sources'],
+  ['/pricing/', 'Pricing'],
+] as const;
+const here = (p: string): boolean => Astro.url.pathname === p || (p !== '/' && Astro.url.pathname.startsWith(p));
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title === SITE_NAME ? title : `${title} · ${SITE_NAME}`}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:type" content="website" />
+    <meta name="archive-api:base" content={API_URL} />
+  </head>
+  <body>
+    <header class="site">
+      <div class="wrap">
+        <a class="brand" href="/" aria-current={Astro.url.pathname === '/' ? 'page' : undefined}>{SITE_NAME}</a>
+        {nav.map(([href, label]) => <a href={href} aria-current={here(href) ? 'page' : undefined}>{label}</a>)}
+      </div>
+    </header>
+    <main class="wrap">
+      <slot />
+    </main>
+    <footer class="site">
+      <div class="wrap">
+        Every answer carries provenance: source, upstream URL, capture time, raw-snapshot SHA-256 and hash-chain position.
+        Missing captures are reported, never interpolated. API base: <code>{API_URL}</code>.
+      </div>
+    </footer>
+  </body>
+</html>

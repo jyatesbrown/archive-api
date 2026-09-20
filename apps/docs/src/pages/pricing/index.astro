@@ -1,0 +1,28 @@
+---
+import Base from '../../layouts/Base.astro';
+
+const tiers = [
+  { name: 'Free', price: '$0', calls: '1,000 / month', lookback: '90 days', bulk: '—', over: 'served; overage recorded at $1 per 1,000' },
+  { name: 'Indie', price: '$29 / month', calls: '25,000 / month', lookback: 'full archive', bulk: '—', over: 'served; overage recorded at $1 per 1,000' },
+  { name: 'Team', price: '$149 / month', calls: '250,000 / month', lookback: 'full archive', bulk: '1 export per quarter', over: 'served; overage recorded at $1 per 1,000' },
+  { name: 'Bulk', price: '$400 one-off', calls: 'unmetered', lookback: 'full archive', bulk: 'single Parquet dump of a source', over: '—' },
+] as const;
+---
+
+<Base title="Pricing" description="Free, Indie, Team and Bulk tiers: calls per month, lookback window, bulk export.">
+  <h1>Pricing</h1>
+  <p class="lead">Metered per API key per calendar month (UTC). Paid keys are never blocked: past your allowance we keep answering and record the overage.</p>
+  <table>
+    <tr><th>Tier</th><th>Price</th><th>Calls</th><th>Lookback</th><th>Bulk export</th><th>Past the allowance</th></tr>
+    {tiers.map((t) => (
+      <tr><td><strong>{t.name}</strong></td><td>{t.price}</td><td>{t.calls}</td><td>{t.lookback}</td><td>{t.bulk}</td><td>{t.over}</td></tr>
+    ))}
+  </table>
+  <p>No key at all works too: 100 calls a month per address with the 90-day window, enough to evaluate the API from the <a href="/">console</a> or curl.</p>
+
+  <h2>Getting a key</h2>
+  <p>Checkout is not open yet. Until it is, write to <a href="mailto:hello@archive-api.dev">hello@archive-api.dev</a> with the tier you want; keys are issued by hand and arrive as a single <code>ak_live_…</code> string shown once. We store only its SHA-256 and the support-visible prefix (<code>ak_live_xxxxxxxx</code>), so quote the prefix, never the key, in support requests.</p>
+
+  <h2>What "lookback" means</h2>
+  <p>Measured in calendar days back from today, UTC. A free-tier request for an earlier date gets an <code>HTTP 402</code> with a <code>lookback_exceeded</code> problem body naming the earliest allowed date and the upgrade tier — not a bare error. See <a href="/docs/#lookback">the endpoint reference</a>.</p>
+</Base>
