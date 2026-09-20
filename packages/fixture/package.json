@@ -1,0 +1,38 @@
+{
+  "name": "@archive-api/fixture",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Deterministic synthetic source emitted in the archive-harness on-disk layout (SQLite index + raw payloads), with tagged pathological cases.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "archive-fixture": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "contract"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "generate": "node dist/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.11",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "5.7.2",
+    "vitest": "4.1.11"
+  }
+}
