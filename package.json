@@ -1,0 +1,16 @@
+{
+  "name": "archive-api",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "test": "pnpm -r test",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "coverage": "pnpm -r coverage",
+    "fixture:generate": "pnpm --filter @archive-api/fixture build && node packages/fixture/dist/cli.js --out fixture-data/small --profile small"
+  }
+}

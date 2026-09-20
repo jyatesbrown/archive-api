@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.astro/
+.env
+.env.local
+.wrangler/
+fixture-data/

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          # node:sqlite (used by the fixture generator) is unflagged from 22.13.
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  # The fixture claims to reproduce archive-harness's on-disk contract; prove it
+  # with the harness's own code rather than our re-implementation.
+  harness-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: jyatesbrown/archive-harness
+          ref: 75c58f46583c0a9d3f39857cda38f3af7595af53
+          path: .archive-harness
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @archive-api/fixture build
+      - run: node packages/fixture/dist/cli.js --out fixture-data/small --profile small
+      - run: PYTHONPATH=.archive-harness python3 packages/fixture/scripts/harness_parity.py fixture-data/small
