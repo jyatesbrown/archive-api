@@ -302,8 +302,8 @@ describe('structured request log', () => {
       record_key: 'A',
       status: 200,
       cache: 'miss',
-      tier: 'anonymous',
-      key_prefix: null,
+      tier: 'team',
+      key_prefix: 'ak_test_teamteam',
       problem: null,
     });
     expect(t.logger.entries[1]).toMatchObject({ cache: 'hit' });
@@ -325,7 +325,8 @@ describe('structured request log', () => {
     const t = memoryApp();
     await t.get('/v1/mini/asof?key=B&date=2025-01-02');
     await t.get('/v1/mini/diff?from=2025-01-01&to=2025-01-05&include=payload');
-    const text = JSON.stringify(t.logger.entries);
+    // request_id is random hex and may legitimately contain "b2"; every other field must be payload-free.
+    const text = JSON.stringify(t.logger.entries.map(({ request_id: _id, ...rest }) => rest));
     expect(text).not.toContain('Beta');
     expect(text).not.toContain('Gamma');
     expect(text).not.toContain('b2');

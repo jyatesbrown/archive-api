@@ -3,7 +3,8 @@
   "compilerOptions": {
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["src", "tests", "scripts"],
   "exclude": ["src/index.ts", "src/stores/cloudflare.ts"]

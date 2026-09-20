@@ -12,6 +12,9 @@ export type ProblemCode =
   | 'method_not_allowed'
   | 'no_capture'
   | 'invalid_cursor'
+  | 'invalid_key'
+  | 'lookback_exceeded'
+  | 'quota_exhausted'
   | 'internal';
 
 export interface Problem {
@@ -32,6 +35,9 @@ const TITLES: Record<ProblemCode, string> = {
   method_not_allowed: 'Method not allowed',
   no_capture: 'No capture on the requested date',
   invalid_cursor: 'Invalid cursor',
+  invalid_key: 'Invalid API key',
+  lookback_exceeded: 'Requested date is outside your plan\'s lookback window',
+  quota_exhausted: 'Monthly call allowance exhausted',
   internal: 'Internal error',
 };
 

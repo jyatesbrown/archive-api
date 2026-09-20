@@ -7,6 +7,10 @@ import { MemoryStore, type MemoryCaptureInput } from '@archive-api/engine';
 import { SMALL_PARAMS, writeFixture, type FixtureManifest } from '@archive-api/fixture';
 
 import { createApp, type App } from '../src/app.js';
+import { NoopBilling } from '../src/auth/billing.js';
+import { MemoryKeyStore, mintKey, sha256Hex, type ApiKeyRecord } from '../src/auth/keys.js';
+import { MemoryMeter } from '../src/auth/meter.js';
+import type { Tier } from '../src/auth/tiers.js';
 import { MemoryResponseCache } from '../src/cache.js';
 import { MemoryLogger } from '../src/logging.js';
 import { StaticRegistry, type SourceRegistry } from '../src/registry.js';
@@ -84,23 +88,59 @@ export interface TestApp {
   app: App;
   cache: MemoryResponseCache;
   logger: MemoryLogger;
-  get(path: string, init?: RequestInit): Promise<Response>;
+  keys: MemoryKeyStore;
+  meter: MemoryMeter;
+  billing: NoopBilling;
+  /** Plaintext of a pre-minted team (full archive) key that `get` sends by default. */
+  teamKey: string;
+  /** Mint a key of `tier` and register it. Returns the plaintext. */
+  mint(tier: Exclude<Tier, 'anonymous'>, revoked?: boolean): Promise<{ plaintext: string; record: ApiKeyRecord }>;
+  /**
+   * GET with the team key unless the caller sets their own `authorization` /
+   * `x-api-key`, or passes `anonymous: true`.
+   */
+  get(path: string, init?: RequestInit & { anonymous?: boolean }): Promise<Response>;
 }
+
+export const TEAM_KEY = 'ak_test_teamteam_abcdefghjkmnpqrstuvwxyz23456789a';
 
 export function appFor(registry: SourceRegistry, now?: () => Date): TestApp {
   const cache = new MemoryResponseCache();
   const logger = new MemoryLogger();
-  const app = createApp(now ? { registry, cache, logger, now } : { registry, cache, logger });
+  const keys = new MemoryKeyStore();
+  const meter = new MemoryMeter();
+  const billing = new NoopBilling();
+  const auth = { keys, meter, billing };
+  const app = createApp(now ? { registry, cache, logger, auth, now } : { registry, cache, logger, auth });
+  const ready = sha256Hex(TEAM_KEY).then((h) =>
+    keys.add(h, { id: 'team-1', prefix: 'ak_test_teamteam', tier: 'team', owner: 'tests', createdAt: '2025-01-01T00:00:00Z', revokedAt: null }),
+  );
   return {
     app,
     cache,
     logger,
-    get: (path, init) => app.fetch(new Request(`https://api.test${path}`, init)),
+    keys,
+    meter,
+    billing,
+    teamKey: TEAM_KEY,
+    async mint(tier, revoked = false) {
+      const m = await mintKey(tier, `${tier}@tests`, 'test');
+      const record = revoked ? { ...m.record, revokedAt: '2025-06-01T00:00:00Z' } : m.record;
+      keys.add(m.hash, record);
+      return { plaintext: m.plaintext, record };
+    },
+    get: async (path, init) => {
+      await ready;
+      const { anonymous, ...rest } = init ?? {};
+      const headers = new Headers(rest.headers);
+      if (!anonymous && !headers.has('authorization') && !headers.has('x-api-key')) headers.set('authorization', `Bearer ${TEAM_KEY}`);
+      return app.fetch(new Request(`https://api.test${path}`, { ...rest, headers }));
+    },
   };
 }
 
 /** Tiny hand-built source for shape/edge tests. */
-export function memoryApp(): TestApp & { store: MemoryStore } {
+export function memoryApp(now?: () => Date): TestApp & { store: MemoryStore } {
   const rec = (hash: string, entity: string, v: number) => ({ hash, payload: { entity, v } });
   const caps: MemoryCaptureInput[] = [
     { snapshotId: 1, fetchedAt: '2025-01-01T06:00:00Z', outcome: 'ok', contentHash: 'c1', records: new Map([['A', rec('a1', 'Alpha', 1)], ['B', rec('b1', 'Beta', 1)]]) },
@@ -113,7 +153,7 @@ export function memoryApp(): TestApp & { store: MemoryStore } {
     { id: 7, name: 'mini', upstreamUrl: 'https://upstream.test/mini.json', windowDays: null, windowKeyPart: 0, entityFields: ['entity'] },
     caps,
   );
-  return { ...appFor(new StaticRegistry([store])), store };
+  return { ...appFor(new StaticRegistry([store]), now), store };
 }
 
 export async function body<T = Record<string, unknown>>(res: Response): Promise<T> {
