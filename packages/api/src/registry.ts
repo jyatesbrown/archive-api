@@ -15,6 +15,8 @@ export interface SourceSummary {
 /** Per-source configuration that is not in the harness DB. */
 export interface SourceConfig {
   entityFields?: readonly string[];
+  /** Whole archive readable by every tier (sample data); metering still applies. */
+  openArchive?: boolean;
 }
 
 export type SourceConfigMap = Readonly<Record<string, SourceConfig>>;
@@ -30,9 +32,18 @@ export function parseSourceConfig(raw: string | undefined): SourceConfigMap {
     if (ef !== undefined && !(Array.isArray(ef) && ef.every((f) => typeof f === 'string'))) {
       throw new Error(`SOURCE_CONFIG.${name}.entityFields must be string[]`);
     }
-    out[name] = ef === undefined ? {} : { entityFields: ef as string[] };
+    const open = (cfg as { openArchive?: unknown }).openArchive;
+    if (open !== undefined && typeof open !== 'boolean') throw new Error(`SOURCE_CONFIG.${name}.openArchive must be a boolean`);
+    out[name] = {
+      ...(ef === undefined ? {} : { entityFields: ef as string[] }),
+      ...(open === undefined ? {} : { openArchive: open }),
+    };
   }
   return out;
+}
+
+export function openSources(config: SourceConfigMap): ReadonlySet<string> {
+  return new Set(Object.entries(config).filter(([, c]) => c.openArchive === true).map(([n]) => n));
 }
 
 export interface SourceRegistry {

@@ -4,7 +4,7 @@ import { NoopBilling, type BillingProvider } from './auth/billing.js';
 import { SqlKeyStore } from './auth/keys.js';
 import { WorkersResponseCache } from './cache.js';
 import { ConsoleLogger } from './logging.js';
-import { parseSourceConfig } from './registry.js';
+import { openSources, parseSourceConfig } from './registry.js';
 import { D1Client, DurableObjectMeter, R2Reader } from './stores/cloudflare.js';
 import { SqlRegistry } from './stores/sql-store.js';
 
@@ -29,13 +29,15 @@ function billingFor(env: Env): BillingProvider {
 // belongs to this request's ExecutionContext.
 function appFor(env: Env, ctx: ExecutionContext): App {
   const db = new D1Client(env.DB);
+  const config = parseSourceConfig(env.SOURCE_CONFIG);
   return createApp({
+    openSources: openSources(config),
     auth: { keys: new SqlKeyStore(db), meter: new DurableObjectMeter(env.METER), billing: billingFor(env) },
     registry: new SqlRegistry(
       db,
       new R2Reader(env.PAYLOADS),
       env.PAYLOAD_PREFIX ?? 'payloads/',
-      parseSourceConfig(env.SOURCE_CONFIG),
+      config,
     ),
     cache: new WorkersResponseCache(caches.default),
     logger: new ConsoleLogger(),

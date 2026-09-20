@@ -250,3 +250,32 @@ describe('free tier over the fixture', () => {
     expect((await body<{ resolution: string }>(full)).resolution).toBe('exact');
   });
 });
+
+describe('open archive (docs console sample data)', () => {
+  it('an anonymous caller reads the whole fixture archive, still metered, and the cache is shared with paid callers', async () => {
+    const last = fx.manifest.dates[fx.manifest.dates.length - 1] as string;
+    const today = new Date(`${last}T12:00:00Z`);
+    today.setUTCDate(today.getUTCDate() + 200);
+    const ot = appFor(fx.registry, { now: () => today, openSources: new Set([SRC]) });
+    const c = fx.manifest.cases.resurrect;
+
+    const anon = await ot.get(q('asof', { key: c.key, date: date(0) }), { anonymous: true });
+    expect(anon.status).toBe(200);
+    expect(anon.headers.get('x-tier')).toBe('anonymous');
+    expect(anon.headers.get('x-ratelimit-used')).toBe('1');
+    expect(anon.headers.get('x-cache')).toBe('MISS');
+
+    const team = await ot.get(q('asof', { key: c.key, date: date(0) }));
+    expect(team.headers.get('x-cache')).toBe('HIT');
+
+    const hist = await body<{ lookback: { limited: boolean }; firstSeen: { date: string } | null }>(
+      await ot.get(q('history', { key: c.key }), { anonymous: true }),
+    );
+    expect(hist.lookback).toEqual({ limited: false });
+    expect(hist.firstSeen?.date).toBe(date(0));
+
+    // Other sources keep their window.
+    const closed = appFor(fx.registry, { now: () => today, openSources: new Set(['some_other_source']) });
+    expect((await closed.get(q('asof', { key: c.key, date: date(0) }), { anonymous: true })).status).toBe(402);
+  });
+});
