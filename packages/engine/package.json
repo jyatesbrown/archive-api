@@ -1,0 +1,32 @@
+{
+  "name": "@archive-api/engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pure point-in-time query engine (asOf / diff / history) over an archive-harness snapshot store. Zero runtime dependencies, no I/O.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@archive-api/fixture": "workspace:*",
+    "@types/node": "22.19.11",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "5.7.2",
+    "vitest": "4.1.11"
+  }
+}
