@@ -143,13 +143,13 @@ resources are provisioned (RUNBOOK, Task 5).
 ```
 pnpm --filter @archive-api/fixture build
 node packages/fixture/dist/cli.js --out fixture-data/small --profile small
-pnpm --filter @archive-api/api fixture:load --db fixture-data/small/harness.sqlite \
-  --payloads fixture-data/small/payloads --out /tmp/d1-load
-# then, with your own wrangler login:
-wrangler d1 execute archive-index --remote --file /tmp/d1-load/schema.sql
-for f in /tmp/d1-load/data-*.sql; do wrangler d1 execute archive-index --remote --file "$f"; done
-BUCKET=archive-store /tmp/d1-load/upload-payloads.sh
+# incremental: exports only snapshots newer than D1's max id, applies them, uploads their payloads
+bash packages/api/scripts/sync.sh --db fixture-data/small/harness.sqlite \
+  --payloads fixture-data/small/payloads            # add --local for wrangler dev stores
 ```
+
+`scripts/sync.sh` wraps `fixture:load` (`scripts/export-store.ts`), which can
+also be run alone to inspect the generated SQL: `pnpm fixture:load --db … --payloads … --out DIR [--after-snapshot-id N]`.
 
 ## Tests
 

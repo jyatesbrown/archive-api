@@ -1,0 +1,62 @@
+name: Deploy Worker
+
+# Deploys packages/api to Cloudflare on every push to main once the repo has
+# CLOUDFLARE_API_TOKEN (Workers Scripts:Edit, D1:Edit) and CLOUDFLARE_ACCOUNT_ID
+# secrets. Until they exist the job is skipped, not failed. apps/docs is
+# deployed by Cloudflare Pages' own Git integration (RUNBOOK.md §3.4).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/api/**'
+      - 'packages/engine/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      HAS_CF: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @archive-api/api... build
+      - run: pnpm --filter @archive-api/api typecheck
+      - run: pnpm --filter @archive-api/api test
+      - name: Skip (no Cloudflare secrets)
+        if: env.HAS_CF != 'true'
+        run: echo "CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set; skipping deploy" >> "$GITHUB_STEP_SUMMARY"
+      - name: Apply api_keys schema
+        if: env.HAS_CF == 'true'
+        working-directory: packages/api
+        run: pnpm exec wrangler d1 execute archive-index --remote --file contract/api-keys.sql
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: wrangler deploy
+        if: env.HAS_CF == 'true'
+        working-directory: packages/api
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Smoke test
+        if: env.HAS_CF == 'true' && vars.API_URL != ''
+        run: |
+          curl -fsS "${{ vars.API_URL }}/health"
+          curl -fsS -o /dev/null -w '%{http_code}\n' "${{ vars.API_URL }}/v1/sources"

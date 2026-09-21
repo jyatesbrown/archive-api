@@ -25,7 +25,7 @@ Contents
 archive-harness (daily, deploy/run_daily.sh)
    └─ R2 bucket            harness.sqlite (current index), db-history/…, payloads/<source>/YYYY/MM/<ts>-<sha12>.raw
                                   │                                   │
-        packages/api/scripts/load-fixture.ts (projection, idempotent) │  read-only binding PAYLOADS
+        packages/api/scripts/sync.sh (incremental projection)          │  read-only binding PAYLOADS
                                   ▼                                   ▼
 Cloudflare D1 "archive-index"  sources / snapshots / record_index / api_keys
 Cloudflare Worker "archive-api"  GET /v1/{source}/{asof,diff,history}  GET /v1/sources  GET /health
@@ -36,7 +36,8 @@ Cloudflare Pages (apps/docs)     static docs + live console calling PUBLIC_API_U
 | Thing | Where | Notes |
 |---|---|---|
 | Worker config | `packages/api/wrangler.toml` | `SOURCE_CONFIG`, `PAYLOAD_PREFIX`, `PRICING_URL`, `BILLING_PROVIDER`, bindings |
-| D1 schema (harness tables) | emitted by `load-fixture.ts` as `schema.sql` | mirrors harness `record_index` etc.; additive only |
+| D1 schema (harness tables) | emitted by `scripts/export-store.ts` as `schema.sql` | mirrors harness `record_index` etc.; additive only |
+| Worker deploy | `.github/workflows/deploy.yml` on push to `main` | skipped until `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` repo secrets exist |
 | D1 schema (keys) | `packages/api/contract/api-keys.sql` | `api_keys` table, hashes only |
 | Docs config | `apps/docs/src/config/{site,sources}.ts` | `PUBLIC_SITE_URL` / `PUBLIC_API_URL` at build time |
 | Tier ladder | `packages/api/src/auth/tiers.ts` | Free 1k/90d, Indie 25k, Team 250k, Bulk unmetered |
@@ -60,19 +61,12 @@ Run the Worker against local D1/R2 with real fixture data (this is the exact
 path the docs console exercises; ~2 min):
 
 ```bash
-# 1. project the fixture DB into D1 SQL + an R2 upload script
-pnpm --filter @archive-api/api fixture:load \
-  --db ../../fixture-data/small/harness.sqlite \
-  --payloads ../../fixture-data/small/payloads --out /tmp/d1-load
-
 cd packages/api
-# 2. schema + data (each INSERT is <= 400 rows: D1 rejects statements over ~100 KB)
-pnpm exec wrangler d1 execute archive-index --local --file /tmp/d1-load/schema.sql
+# 1. index + payloads into wrangler's local D1/R2 (same script as production, §3.2)
+bash scripts/sync.sh --db ../../fixture-data/small/harness.sqlite \
+  --payloads ../../fixture-data/small/payloads --local
 pnpm exec wrangler d1 execute archive-index --local --file contract/api-keys.sql
-for f in /tmp/d1-load/data-*.sql; do pnpm exec wrangler d1 execute archive-index --local --file "$f"; done
-# 3. payloads
-WRANGLER_FLAGS=--local bash /tmp/d1-load/upload-payloads.sh
-# 4. serve
+# 2. serve
 pnpm exec wrangler dev --local --port 8787
 curl 'localhost:8787/v1/fixture_registry/asof?key=2025-01-01%7CR000000&date=2025-02-01'
 ```
@@ -106,23 +100,46 @@ exports are uploaded to the same bucket under `EXPORT_PREFIX` (`exports/`) by
 
 ### 3.2 Load / refresh the index (after every harness run you want visible)
 
-The harness publishes a new `harness.sqlite` daily. Project it into D1:
+`packages/api/scripts/sync.sh` is the one command. It reads the highest
+`snapshots.id` already in D1, exports only newer snapshots (plus their
+`record_index` rows and raw payloads) with `scripts/export-store.ts`, and
+applies them. Because the harness only appends snapshots, that single integer
+is a complete watermark; a first run on an empty D1 loads everything.
 
 ```bash
-aws --endpoint-url "$R2_ENDPOINT_URL" s3 cp "s3://$R2_BUCKET/harness.sqlite" /tmp/harness.sqlite
-pnpm --filter @archive-api/api fixture:load --db /tmp/harness.sqlite \
-  --payloads /nonexistent --out /tmp/d1-load      # payloads already in R2; skip upload-payloads.sh
 cd packages/api
-pnpm exec wrangler d1 execute archive-index --remote --file /tmp/d1-load/schema.sql
-for f in /tmp/d1-load/data-*.sql; do pnpm exec wrangler d1 execute archive-index --remote --file "$f"; done
+export CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=…    # D1 edit (+ R2 object write if uploading payloads)
+
+# Harness host, right after deploy/run_daily.sh (cron) — DB and payloads are local:
+bash scripts/sync.sh --db /path/to/harness/data/harness.sqlite --payloads /path/to/harness/data/payloads
+
+# Anywhere else — payloads already in the bucket via the harness's own s3 sync, so only the index:
+aws --endpoint-url "$R2_ENDPOINT_URL" s3 cp "s3://$R2_BUCKET/harness.sqlite" /tmp/harness.sqlite
+bash scripts/sync.sh --db /tmp/harness.sqlite
 ```
 
-All statements are `INSERT OR IGNORE` with the harness's own primary keys, so
-re-running is idempotent and only appends. `--source NAME` restricts to one
-source. Never `DELETE` from the harness tables in D1; if a projection is
-wrong, rebuild the database (§8).
+Flags: `--source NAME` (one source; watermark is then per source), `--local`
+(wrangler dev stores), `--dry-run` (export only, prints the artefact dir).
+Env: `D1_NAME`, `BUCKET`, `PAYLOAD_PREFIX` (must equal the Worker var).
+
+All statements are `INSERT OR IGNORE` (`INSERT OR REPLACE` for `sources`
+metadata) on the harness's own primary keys, so an interrupted run is simply
+re-run. Never `DELETE` from the harness tables in D1; if a projection is wrong,
+rebuild the database (§8). The lower-level `pnpm fixture:load --after-snapshot-id N`
+is what `sync.sh` calls; use it to inspect the SQL before applying.
 
 ### 3.3 Deploy the Worker
+
+Automatic: `.github/workflows/deploy.yml` runs on every push to `main` that
+touches `packages/api` or `packages/engine` (and on `workflow_dispatch`). It
+builds, typechecks, tests, applies `contract/api-keys.sql`, then
+`wrangler deploy`. It needs repository secrets `CLOUDFLARE_API_TOKEN`
+(permissions: Workers Scripts:Edit, D1:Edit, Account Settings:Read) and
+`CLOUDFLARE_ACCOUNT_ID`; without them the job logs "skipping deploy" and
+succeeds. Set repository variable `API_URL` (e.g. `https://api.archive-api.dev`)
+to get a post-deploy smoke test of `/health` and `/v1/sources`.
+
+Manual:
 
 ```bash
 cd packages/api
@@ -316,8 +333,9 @@ freshness. Capture freshness is visible per source via
   the API shows the rejection in provenance. If it persists >3 days, consider
   `harness … accept --source X --note …` in the harness — that is a harness
   decision, made there, never by editing D1.
-- **Run succeeded but D1 is stale** (users see an old `lastCapture`). §3.2 was
-  not run or failed part-way. Re-run it; it is idempotent. Then hit
+- **Run succeeded but D1 is stale** (users see an old `lastCapture`). §3.2
+  (`sync.sh`) was not run or failed part-way. Re-run it; it resumes from the D1
+  watermark and is idempotent. Then hit
   `/v1/sources` — cached for 60 s, so allow a minute.
 - **`asof` returns `payload: null` with `resolution: "exact"`** after a
   projection. The index references a `raw_path` that isn't in R2 under
