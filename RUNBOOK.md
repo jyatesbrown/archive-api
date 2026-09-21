@@ -227,8 +227,66 @@ month remains attributed to it in the `MonthlyCounter` DO — nothing to clean u
 
 Counters are per `key:<id>` per UTC month and roll over automatically. Paid
 tiers are never blocked; overage is recorded via `BillingProvider.reportUsage`
-(currently `noop`, which logs). To inspect a key's month, hit any `/v1` route
-with the key and read `x-ratelimit-used`.
+(`noop` logs; `lemonsqueezy` posts a usage record, §4.5). To inspect a key's
+month, hit any `/v1` route with the key and read `x-ratelimit-used`.
+
+### 4.5 Billing: Lemon Squeezy (merchant of record)
+
+One-time, in the Lemon Squeezy dashboard:
+
+1. Create one product per paid tier (Indie $29/mo, Team $149/mo, Bulk $400
+   one-off) and note each **variant id**. For Indie/Team add a usage-based
+   price component "per 1,000 calls over allowance" at $1 with aggregation
+   **"Most recent usage during a period"** (the Worker reports with
+   `action: set`; any other aggregation double-counts).
+2. Create an API key (Settings → API).
+3. Create a webhook to `https://<worker-host>/billing/lemonsqueezy/webhook`,
+   pick a signing secret, and subscribe to all `subscription_*` events.
+
+Then configure the Worker:
+
+```bash
+cd packages/api
+# wrangler.toml [vars]
+#   BILLING_PROVIDER = "lemonsqueezy"
+#   LEMONSQUEEZY_STORE = "<slug>"                      # <slug>.lemonsqueezy.com
+#   LEMONSQUEEZY_VARIANTS = '{"indie":"111","team":"222","bulk":"333"}'
+pnpm exec wrangler secret put LEMONSQUEEZY_API_KEY
+pnpm exec wrangler secret put LEMONSQUEEZY_WEBHOOK_SECRET
+pnpm exec wrangler d1 execute archive-index --remote --file contract/billing.sql
+pnpm exec wrangler deploy
+```
+
+How it fits together (`src/auth/lemonsqueezy.ts`):
+
+- **Upgrade path.** A `402`/`429` problem's `upgrade.checkout_url` is the static
+  link `https://<slug>.lemonsqueezy.com/checkout/buy/<variant>?checkout[custom][key_id]=<key id>`.
+  The customer needs a key first (mint a **free** one, §4 Mint); the key id
+  rides along as custom data so the webhook can find it. No API call on the
+  request path.
+- **Webhook** (the Worker's only D1 write path). Signature is checked
+  (`X-Signature`, HMAC-SHA256 of the raw body); then for `subscription_*`
+  events with our `key_id`: `billing_subscriptions` is upserted and
+  `api_keys.tier` follows the subscription **status** — `active`, `on_trial`,
+  `past_due`, `cancelled` (access until period end) and `paused` keep the paid
+  tier; `expired`/`unpaid` drop the key to `free`. Unknown variants or key ids
+  are acknowledged with `200 {action: "ignored"}` so the provider stops
+  retrying; only bad signatures (401) and bad JSON (400) are rejected.
+- **Usage.** At each billable boundary (first call past the allowance, then
+  every 1,000) the Worker `POST`s a usage record for the key's subscription
+  item with `quantity = ceil(overage / 1000)`, `action: set`. Keys without a
+  linked subscription (hand-minted paid keys) are simply not reported.
+
+Manual linking (customer paid, webhook missed): find the subscription in the
+dashboard, then
+
+```bash
+pnpm exec wrangler d1 execute archive-index --remote --command "INSERT OR REPLACE INTO billing_subscriptions VALUES ('<key id>','lemonsqueezy','<subscription id>','<subscription item id>','<variant id>','active',datetime('now'))"
+pnpm exec wrangler d1 execute archive-index --remote --command "UPDATE api_keys SET tier='team' WHERE id='<key id>'"
+```
+
+Switching provider later means implementing `BillingProvider` and adding a
+case to `billingFor()` in `src/index.ts`; nothing else knows which one is live.
 
 ### Bulk exports (Team quarterly / Bulk one-off)
 

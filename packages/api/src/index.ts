@@ -1,7 +1,8 @@
 /** Cloudflare Worker entry. Everything testable lives in ./app.ts. */
 import { createApp, type App } from './app.js';
-import { NoopBilling, type BillingProvider } from './auth/billing.js';
+import { DEFAULT_PRICING_URL, NoopBilling, type BillingProvider } from './auth/billing.js';
 import { SqlKeyStore } from './auth/keys.js';
+import { LemonSqueezyBilling, SqlSubscriptions, handleWebhook, parseVariantMap, webhookResponse } from './auth/lemonsqueezy.js';
 import { WorkersResponseCache } from './cache.js';
 import { SqlExportLedger } from './export.js';
 import { ConsoleLogger } from './logging.js';
@@ -16,18 +17,48 @@ export interface Env {
   SOURCE_CONFIG?: string;
   PAYLOAD_PREFIX?: string;
   PRICING_URL?: string;
-  /** `noop` today; a merchant-of-record adapter selects itself here once it exists. */
+  /** `noop` | `lemonsqueezy`. */
   BILLING_PROVIDER?: string;
+  /** Store slug (`<slug>.lemonsqueezy.com`) and JSON `{ indie: "<variant id>", team: ..., bulk: ... }`. */
+  LEMONSQUEEZY_STORE?: string;
+  LEMONSQUEEZY_VARIANTS?: string;
+  /** Secrets (`wrangler secret put`). */
+  LEMONSQUEEZY_API_KEY?: string;
+  LEMONSQUEEZY_WEBHOOK_SECRET?: string;
   /** R2 key prefix of published Parquet exports (scripts/export-parquet.ts). */
   EXPORT_PREFIX?: string;
   /** Secret (wrangler secret put): HMAC key for export download links. Unset disables bulk export. */
   EXPORT_SIGNING_SECRET?: string;
 }
 
-function billingFor(env: Env): BillingProvider {
+// Not exported: workerd requires every export of `main` to be a handler.
+const WEBHOOK_PATH = '/billing/lemonsqueezy/webhook';
+
+function billingFor(env: Env, db: D1Client): BillingProvider {
   const provider = env.BILLING_PROVIDER ?? 'noop';
-  if (provider !== 'noop') throw new Error(`BILLING_PROVIDER '${provider}' is not implemented`);
-  return new NoopBilling(env.PRICING_URL);
+  if (provider === 'noop') return new NoopBilling(env.PRICING_URL);
+  if (provider === 'lemonsqueezy') {
+    return new LemonSqueezyBilling({
+      apiKey: env.LEMONSQUEEZY_API_KEY ?? '',
+      store: env.LEMONSQUEEZY_STORE ?? '',
+      variants: parseVariantMap(env.LEMONSQUEEZY_VARIANTS),
+      pricingUrl: env.PRICING_URL ?? DEFAULT_PRICING_URL,
+      subscriptions: new SqlSubscriptions(db, db),
+    });
+  }
+  throw new Error(`BILLING_PROVIDER '${provider}' is not implemented`);
+}
+
+/** Provider webhooks moving keys between tiers (the other Worker write is the bulk_exports ledger). */
+async function webhook(request: Request, env: Env): Promise<Response> {
+  if (env.BILLING_PROVIDER !== 'lemonsqueezy') return new Response(null, { status: 404 });
+  const db = new D1Client(env.DB);
+  const outcome = await handleWebhook(request, {
+    secret: env.LEMONSQUEEZY_WEBHOOK_SECRET ?? '',
+    variants: parseVariantMap(env.LEMONSQUEEZY_VARIANTS),
+    subscriptions: new SqlSubscriptions(db, db),
+  });
+  return webhookResponse(outcome);
 }
 
 // Stateless per request: the registry holds no connections and `waitUntil`
@@ -38,7 +69,7 @@ function appFor(env: Env, ctx: ExecutionContext): App {
   const config = parseSourceConfig(env.SOURCE_CONFIG);
   return createApp({
     openSources: openSources(config),
-    auth: { keys: new SqlKeyStore(db), meter: new DurableObjectMeter(env.METER), billing: billingFor(env) },
+    auth: { keys: new SqlKeyStore(db), meter: new DurableObjectMeter(env.METER), billing: billingFor(env, db) },
     registry: new SqlRegistry(db, blobs, env.PAYLOAD_PREFIX ?? 'payloads/', config),
     exports: {
       objects: blobs,
@@ -54,6 +85,7 @@ function appFor(env: Env, ctx: ExecutionContext): App {
 
 export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    if (new URL(request.url).pathname === WEBHOOK_PATH) return webhook(request, env);
     return appFor(env, ctx).fetch(request);
   },
 } satisfies ExportedHandler<Env>;

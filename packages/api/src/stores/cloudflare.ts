@@ -1,18 +1,12 @@
 /** D1 / R2 bindings for SqlClient / BlobReader. Not unit-tested (needs the Workers runtime). */
 import type { BlobReader, SqlClient, SqlValue } from './sql-store.js';
 
+import type { SqlWriter } from '../auth/lemonsqueezy.js';
 import type { Meter } from '../auth/meter.js';
 import type { ExportObject, ObjectReader, SqlRunner } from '../export.js';
 
-export class D1Client implements SqlClient, SqlRunner {
+export class D1Client implements SqlClient, SqlRunner, SqlWriter {
   constructor(private readonly db: D1Database) {}
-  /** Writes are confined to the bulk_exports ledger; the archive tables stay read-only. */
-  async run(sql: string, params: readonly SqlValue[]): Promise<void> {
-    await this.db
-      .prepare(sql)
-      .bind(...params)
-      .run();
-  }
   async all<T>(sql: string, params: readonly SqlValue[]): Promise<T[]> {
     const res = await this.db
       .prepare(sql)
@@ -26,6 +20,13 @@ export class D1Client implements SqlClient, SqlRunner {
       .bind(...params)
       .first<T & Record<string, unknown>>();
     return row ?? null;
+  }
+  /** Writes are confined to the billing webhook and the bulk_exports ledger; the archive tables stay read-only. */
+  async run(sql: string, params: readonly SqlValue[]): Promise<void> {
+    await this.db
+      .prepare(sql)
+      .bind(...params)
+      .run();
   }
 }
 
