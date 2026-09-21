@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     testTimeout: 60_000,
+    hookTimeout: 60_000,
     server: { deps: { external: [/^node:sqlite$/] } },
     coverage: {
       provider: 'v8',
