@@ -104,14 +104,27 @@ export interface TestApp {
 
 export const TEAM_KEY = 'ak_test_teamteam_abcdefghjkmnpqrstuvwxyz23456789a';
 
-export function appFor(registry: SourceRegistry, now?: () => Date): TestApp {
+export interface AppOptions {
+  now?: () => Date;
+  openSources?: ReadonlySet<string>;
+}
+
+export function appFor(registry: SourceRegistry, nowOrOpts?: (() => Date) | AppOptions): TestApp {
+  const opts: AppOptions = typeof nowOrOpts === 'function' ? { now: nowOrOpts } : (nowOrOpts ?? {});
   const cache = new MemoryResponseCache();
   const logger = new MemoryLogger();
   const keys = new MemoryKeyStore();
   const meter = new MemoryMeter();
   const billing = new NoopBilling();
   const auth = { keys, meter, billing };
-  const app = createApp(now ? { registry, cache, logger, auth, now } : { registry, cache, logger, auth });
+  const app = createApp({
+    registry,
+    cache,
+    logger,
+    auth,
+    ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.openSources ? { openSources: opts.openSources } : {}),
+  });
   const ready = sha256Hex(TEAM_KEY).then((h) =>
     keys.add(h, { id: 'team-1', prefix: 'ak_test_teamteam', tier: 'team', owner: 'tests', createdAt: '2025-01-01T00:00:00Z', revokedAt: null }),
   );

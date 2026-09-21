@@ -29,6 +29,11 @@ export interface AppDeps {
   cache: ResponseCache;
   logger: Logger;
   auth: AuthDeps;
+  /**
+   * Sources whose whole archive is readable by every tier (the synthetic
+   * fixture the docs console runs against). Metering still applies.
+   */
+  openSources?: ReadonlySet<string>;
   /** Defer work past the response (Workers `ctx.waitUntil`). Defaults to awaiting inline. */
   waitUntil?: (p: Promise<unknown>) => void;
   now?: () => Date;
@@ -171,7 +176,13 @@ export function createApp(deps: AppDeps): App {
    * reach past the caller's window. History has no date parameter; it is
    * truncated in the handler instead and flagged in the body.
    */
+  function windowStart(r: Route, ctx: Ctx): string | null {
+    if (r.source !== null && deps.openSources?.has(r.source)) return null;
+    return earliestAllowed(ctx.principal.tier, ctx.today);
+  }
+
   async function lookbackGate(r: Route, ctx: Ctx): Promise<Response | null> {
+    if (windowStart(r, ctx) === null) return null;
     const params = r.endpoint === 'asof' ? ['date'] : r.endpoint === 'diff' ? ['from', 'to'] : [];
     for (const p of params) {
       const v = ctx.url.searchParams.get(p);
@@ -184,7 +195,7 @@ export function createApp(deps: AppDeps): App {
 
   function cacheVariant(r: Route, ctx: Ctx): Record<string, string> {
     if (r.endpoint !== 'history') return {};
-    const earliest = earliestAllowed(ctx.principal.tier, ctx.today);
+    const earliest = windowStart(r, ctx);
     return earliest === null ? {} : { since: earliest };
   }
 
@@ -207,7 +218,7 @@ export function createApp(deps: AppDeps): App {
         case 'diff':
           return await handleDiff(store, ctx);
         case 'history':
-          return await handleHistory(store, ctx);
+          return await handleHistory(store, ctx, r);
       }
     } catch (err) {
       if (err instanceof NoCaptureError) {
@@ -239,11 +250,11 @@ export function createApp(deps: AppDeps): App {
     return { response: json({ source: store.source.name, ...result }, settled ? IMMUTABLE : SHORT), cacheable: true };
   }
 
-  async function handleHistory(store: SnapshotStore, ctx: Ctx): Promise<Handled> {
+  async function handleHistory(store: SnapshotStore, ctx: Ctx, r: Route): Promise<Handled> {
     const key = required(ctx, 'key');
     if (typeof key !== 'string') return { response: key, cacheable: false };
     const full = await history(store, key);
-    const earliest = earliestAllowed(ctx.principal.tier, ctx.today);
+    const earliest = windowStart(r, ctx);
     const result = earliest === null ? full : truncateHistory(full, earliest);
     const lookback =
       earliest === null

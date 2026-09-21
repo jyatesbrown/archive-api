@@ -8,7 +8,7 @@ enabled = true
 
 [vars]
 # JSON: { "<source name>": { "entityFields": ["field", ...] } }
-SOURCE_CONFIG = '{"fixture_registry":{"entityFields":["entity"]}}'
+SOURCE_CONFIG = '{"fixture_registry":{"entityFields":["entity"],"openArchive":true}}'
 # Key prefix under which the harness syncs raw payloads (deploy/run_daily.sh).
 PAYLOAD_PREFIX = "payloads/"
 PRICING_URL = "https://archive-api.dev/pricing"

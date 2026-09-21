@@ -1,0 +1,21 @@
+---
+import { API_URL } from '../../config/site';
+import { SOURCES } from '../../config/sources';
+import Base from '../../layouts/Base.astro';
+---
+
+<Base title="Sources" description="Every source this deployment archives, with its upstream and sample queries.">
+  <h1>Sources</h1>
+  <p class="lead">One archive per upstream. Live capture counts and first/last dates come from <a href={`${API_URL}/v1/sources`}><code>/v1/sources</code></a>.</p>
+  <table>
+    <tr><th>Source</th><th>Upstream</th><th>Publisher window</th><th>Access</th></tr>
+    {SOURCES.map((s) => (
+      <tr>
+        <td><a href={`/sources/${s.name}/`}><code>{s.name}</code></a><br /><span class="muted">{s.title}</span></td>
+        <td><a href={s.upstreamUrl} rel="nofollow">{s.upstreamUrl}</a></td>
+        <td>{s.windowDays === null ? 'none' : `${s.windowDays} days`}</td>
+        <td>{s.openArchive ? <span class="badge">open archive</span> : 'by tier'}</td>
+      </tr>
+    ))}
+  </table>
+</Base>

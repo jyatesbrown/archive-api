@@ -4,7 +4,7 @@
   "private": true,
   "description": "Cloudflare Worker exposing point-in-time queries (asof / diff / history) over an archive-harness store in D1 + R2.",
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./src/lib.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tests.json",

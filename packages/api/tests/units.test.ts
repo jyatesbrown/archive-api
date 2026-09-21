@@ -5,7 +5,7 @@ import { IMMUTABLE, MemoryResponseCache, NO_STORE, SHORT, cacheKey } from '../sr
 import { DIFF_CATEGORIES, decodeCursor, encodeCursor, pageOf } from '../src/cursor.js';
 import { MemoryLogger, type RequestLog } from '../src/logging.js';
 import { PROBLEM_CODE_HEADER, PROBLEM_TYPE_BASE, problem } from '../src/problem.js';
-import { parseSourceConfig } from '../src/registry.js';
+import { openSources, parseSourceConfig } from '../src/registry.js';
 
 describe('problem()', () => {
   it('emits RFC 9457 problem+json with type/title/status/detail/instance and no-store', async () => {
@@ -146,6 +146,12 @@ describe('logging', () => {
 });
 
 describe('parseSourceConfig()', () => {
+  it('reads openArchive and lists open sources', () => {
+    const cfg = parseSourceConfig('{"demo":{"openArchive":true},"real":{"entityFields":["e"]},"off":{"openArchive":false}}');
+    expect(cfg).toEqual({ demo: { openArchive: true }, real: { entityFields: ['e'] }, off: { openArchive: false } });
+    expect([...openSources(cfg)]).toEqual(['demo']);
+    expect(() => parseSourceConfig('{"x":{"openArchive":"yes"}}')).toThrow(/openArchive/);
+  });
   it('accepts an empty/missing value and a well-formed map', () => {
     expect(parseSourceConfig(undefined)).toEqual({});
     expect(parseSourceConfig('{"a":{"entityFields":["x"]},"b":{}}')).toEqual({ a: { entityFields: ['x'] }, b: {} });

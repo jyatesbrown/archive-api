@@ -92,6 +92,8 @@ contents never appear, and neither do keys: only the `ak_live_xxxxxxxx` prefix.
 - `SOURCE_CONFIG` — JSON `{ "<source name>": { "entityFields": [...] } }`;
   `entityFields` are the payload fields that identify the real-world entity,
   used to tell key reuse from resurrection.
+  `openArchive: true` lifts the lookback window for that source for every
+  tier (sample data for the docs console); metering still applies.
 - `PRICING_URL`, `BILLING_PROVIDER` (`noop`).
 
 The `database_id` / `bucket_name` in `wrangler.toml` are placeholders until
@@ -102,7 +104,7 @@ resources are provisioned (RUNBOOK, Task 5).
 ```
 pnpm --filter @archive-api/fixture build
 node packages/fixture/dist/cli.js --out fixture-data/small --profile small
-pnpm --filter @archive-api/api fixture:load -- --db fixture-data/small/harness.sqlite \
+pnpm --filter @archive-api/api fixture:load --db fixture-data/small/harness.sqlite \
   --payloads fixture-data/small/payloads --out /tmp/d1-load
 # then, with your own wrangler login:
 wrangler d1 execute archive-index --remote --file /tmp/d1-load/schema.sql
@@ -112,7 +114,7 @@ BUCKET=archive-store /tmp/d1-load/upload-payloads.sh
 
 ## Tests
 
-`pnpm test` — 93 tests: unit tests for problem/cursor/cache/logging/config,
+`pnpm test` — 95 tests: unit tests for problem/cursor/cache/logging/config,
 route contract tests over an in-memory store, auth/metering/lookback/billing
 tests with a fixed clock, and integration tests over the real fixture output
 through the SQL/blob store (one named test per pathology, a full multi-page
