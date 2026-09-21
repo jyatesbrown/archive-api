@@ -16,6 +16,9 @@ PRICING_URL = "https://archive-api.dev/pricing"
 BILLING_PROVIDER = "noop"
 # For lemonsqueezy: LEMONSQUEEZY_STORE = "<slug>", LEMONSQUEEZY_VARIANTS = '{"indie":"123","team":"456","bulk":"789"}',
 # plus secrets LEMONSQUEEZY_API_KEY and LEMONSQUEEZY_WEBHOOK_SECRET (wrangler secret put). See RUNBOOK §4.5.
+# Key prefix of published Parquet exports (scripts/export-parquet.ts + its upload.sh).
+# Bulk export also needs the secret EXPORT_SIGNING_SECRET (wrangler secret put); unset = endpoint answers 503.
+EXPORT_PREFIX = "exports/"
 
 [[d1_databases]]
 binding = "DB"

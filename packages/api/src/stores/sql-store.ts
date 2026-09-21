@@ -50,10 +50,43 @@ interface SnapshotRow {
   adapter_version: string;
 }
 
-interface GenericJsonConfig {
+/** harness.adapters.generic_json adapter_config. */
+export interface GenericJsonConfig {
   key_fields: string[];
   records_path?: string | null;
   key_date_field?: string | null;
+}
+
+/**
+ * Raw capture text -> record_key -> record, exactly as the harness indexed it.
+ * Mirrors harness.adapters.generic_json: pages are joined by PAGE_SEP,
+ * records_path is a dotted path into each page ('' = top-level array); key is
+ * [date_part(key_date_field)] + key_fields joined by KEY_SEP.
+ */
+export function indexRawPayload(text: string, cfg: GenericJsonConfig): Map<string, JsonValue> {
+  const out = new Map<string, JsonValue>();
+  for (const page of text.split(PAGE_SEP)) {
+    for (const r of recordsOf(JSON.parse(page) as JsonValue, cfg)) out.set(recordKeyOf(r, cfg), r);
+  }
+  return out;
+}
+
+function recordsOf(doc: JsonValue, cfg: GenericJsonConfig): Array<Record<string, JsonValue>> {
+  let cur: JsonValue = doc;
+  for (const part of (cfg.records_path ?? '').split('.').filter((p) => p !== '')) {
+    if (Array.isArray(cur) && /^\d+$/.test(part)) cur = cur[Number(part)] ?? null;
+    else if (typeof cur === 'object' && cur !== null && !Array.isArray(cur)) cur = cur[part] ?? null;
+    else return [];
+  }
+  if (!Array.isArray(cur)) return [];
+  return cur.filter((r): r is Record<string, JsonValue> => typeof r === 'object' && r !== null && !Array.isArray(r));
+}
+
+function recordKeyOf(r: Record<string, JsonValue>, cfg: GenericJsonConfig): string {
+  const parts = cfg.key_fields.map((f) => String(r[f]));
+  const df = cfg.key_date_field;
+  if (df) parts.unshift(datePart(r[df] ?? null));
+  return parts.join(KEY_SEP);
 }
 
 export class SqlStore implements SnapshotStore {
@@ -155,32 +188,7 @@ export class SqlStore implements SnapshotStore {
     if (!cap?.rawPath) return null;
     const text = await this.blobs.text(this.payloadPrefix + cap.rawPath);
     if (text === null) return null;
-    const out = new Map<string, JsonValue>();
-    for (const page of text.split(PAGE_SEP)) {
-      for (const r of this.recordsOf(JSON.parse(page) as JsonValue)) out.set(this.recordKey(r), r);
-    }
-    return out;
-  }
-
-  // Mirrors harness.adapters.generic_json: records_path is a dotted path into
-  // each page ('' = top-level array); key is [date_part(key_date_field)] +
-  // key_fields joined by KEY_SEP.
-  private recordsOf(doc: JsonValue): Array<Record<string, JsonValue>> {
-    let cur: JsonValue = doc;
-    for (const part of (this.cfg.records_path ?? '').split('.').filter((p) => p !== '')) {
-      if (Array.isArray(cur) && /^\d+$/.test(part)) cur = cur[Number(part)] ?? null;
-      else if (typeof cur === 'object' && cur !== null && !Array.isArray(cur)) cur = cur[part] ?? null;
-      else return [];
-    }
-    if (!Array.isArray(cur)) return [];
-    return cur.filter((r): r is Record<string, JsonValue> => typeof r === 'object' && r !== null && !Array.isArray(r));
-  }
-
-  private recordKey(r: Record<string, JsonValue>): string {
-    const parts = this.cfg.key_fields.map((f) => String(r[f]));
-    const df = this.cfg.key_date_field;
-    if (df) parts.unshift(datePart(r[df] ?? null));
-    return parts.join(KEY_SEP);
+    return indexRawPayload(text, this.cfg);
   }
 }
 

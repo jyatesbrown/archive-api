@@ -8,6 +8,7 @@ export * from './auth/meter.js';
 export * from './auth/tiers.js';
 export * from './cache.js';
 export * from './cursor.js';
+export * from './export.js';
 export * from './logging.js';
 export * from './problem.js';
 export * from './registry.js';

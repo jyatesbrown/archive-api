@@ -94,11 +94,15 @@ pnpm exec wrangler login
 pnpm exec wrangler d1 create archive-index          # paste database_id into wrangler.toml
 pnpm exec wrangler r2 bucket create archive-store   # or reuse the harness bucket (read-only token)
 pnpm exec wrangler d1 execute archive-index --remote --file contract/api-keys.sql
+pnpm exec wrangler d1 execute archive-index --remote --file contract/exports.sql
+openssl rand -hex 32 | pnpm exec wrangler secret put EXPORT_SIGNING_SECRET   # enables /v1/{source}/export
 ```
 
 Point `PAYLOADS` at the bucket that `archive-harness/deploy/run_daily.sh`
 syncs to, with `PAYLOAD_PREFIX` equal to its `payloads/` prefix. The Worker
-only calls `get()` on R2; use a bucket token scoped to object read.
+only calls `get()` on R2; use a bucket token scoped to object read. Parquet
+exports are uploaded to the same bucket under `EXPORT_PREFIX` (`exports/`) by
+`upload.sh` from your own machine, not by the Worker.
 
 ### 3.2 Load / refresh the index (after every harness run you want visible)
 
@@ -267,6 +271,25 @@ pnpm exec wrangler d1 execute archive-index --remote --command "UPDATE api_keys 
 Switching provider later means implementing `BillingProvider` and adding a
 case to `billingFor()` in `src/index.ts`; nothing else knows which one is live.
 
+### Bulk exports (Team quarterly / Bulk one-off)
+
+Publish a dump after the sync in §3.2, per source you sell:
+
+```bash
+cd packages/api
+pnpm export:parquet -- --db /path/harness.sqlite --payloads /path/payloads \
+  --source <name> --out /tmp/exports/<name>
+bash /tmp/exports/<name>/upload.sh        # writes exports/<name>/<stamp>/*.parquet + latest.json
+```
+
+The stamp is derived from the last ok capture, so re-publishing unchanged data
+is a no-op; a new stamp only appears when new captures exist. Customers call
+`GET /v1/<name>/export` with their key and get 7-day signed links; the grant is
+recorded in `bulk_exports`. Rotating `EXPORT_SIGNING_SECRET` invalidates every
+outstanding link (customers re-request and get the same stamp re-signed for
+free). To let a customer re-download a *different* stamp, delete their row:
+`DELETE FROM bulk_exports WHERE key_id = '<id>' AND source = '<name>'`.
+
 ## 5. Adding a source
 
 Prerequisite: the source already exists in the harness (`sources.json`,
@@ -385,6 +408,7 @@ curl -s $H/v1/sources | jq '.sources | length'                            # == s
 curl -s -D - -o /dev/null "$H/v1/fixture_registry/asof?key=2025-01-01%7CR000000&date=2025-02-01" | grep -i 'HTTP/\|immutable'
 curl -s -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer ak_live_deadbeef_00000000000000000000000000000000' $H/v1/sources   # 401
 curl -s -o /dev/null -w '%{http_code}\n' "$H/v1/fixture_registry/asof?key=x&date=2020-01-01"   # 200 (open source) — on a closed source: 402
+curl -s -o /dev/null -w '%{http_code}\n' $H/v1/fixture_registry/export   # 402 anonymous; 503 = EXPORT_SIGNING_SECRET missing; 404 = nothing published
 ```
 
 Docs: open the landing page; the console must show a `200` with

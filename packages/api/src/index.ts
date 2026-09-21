@@ -4,6 +4,7 @@ import { DEFAULT_PRICING_URL, NoopBilling, type BillingProvider } from './auth/b
 import { SqlKeyStore } from './auth/keys.js';
 import { LemonSqueezyBilling, SqlSubscriptions, handleWebhook, parseVariantMap, webhookResponse } from './auth/lemonsqueezy.js';
 import { WorkersResponseCache } from './cache.js';
+import { SqlExportLedger } from './export.js';
 import { ConsoleLogger } from './logging.js';
 import { openSources, parseSourceConfig } from './registry.js';
 import { D1Client, DurableObjectMeter, R2Reader } from './stores/cloudflare.js';
@@ -24,6 +25,10 @@ export interface Env {
   /** Secrets (`wrangler secret put`). */
   LEMONSQUEEZY_API_KEY?: string;
   LEMONSQUEEZY_WEBHOOK_SECRET?: string;
+  /** R2 key prefix of published Parquet exports (scripts/export-parquet.ts). */
+  EXPORT_PREFIX?: string;
+  /** Secret (wrangler secret put): HMAC key for export download links. Unset disables bulk export. */
+  EXPORT_SIGNING_SECRET?: string;
 }
 
 // Not exported: workerd requires every export of `main` to be a handler.
@@ -44,7 +49,7 @@ function billingFor(env: Env, db: D1Client): BillingProvider {
   throw new Error(`BILLING_PROVIDER '${provider}' is not implemented`);
 }
 
-/** The one write path in the Worker: provider webhooks moving keys between tiers. */
+/** Provider webhooks moving keys between tiers (the other Worker write is the bulk_exports ledger). */
 async function webhook(request: Request, env: Env): Promise<Response> {
   if (env.BILLING_PROVIDER !== 'lemonsqueezy') return new Response(null, { status: 404 });
   const db = new D1Client(env.DB);
@@ -60,16 +65,18 @@ async function webhook(request: Request, env: Env): Promise<Response> {
 // belongs to this request's ExecutionContext.
 function appFor(env: Env, ctx: ExecutionContext): App {
   const db = new D1Client(env.DB);
+  const blobs = new R2Reader(env.PAYLOADS);
   const config = parseSourceConfig(env.SOURCE_CONFIG);
   return createApp({
     openSources: openSources(config),
     auth: { keys: new SqlKeyStore(db), meter: new DurableObjectMeter(env.METER), billing: billingFor(env, db) },
-    registry: new SqlRegistry(
-      db,
-      new R2Reader(env.PAYLOADS),
-      env.PAYLOAD_PREFIX ?? 'payloads/',
-      config,
-    ),
+    registry: new SqlRegistry(db, blobs, env.PAYLOAD_PREFIX ?? 'payloads/', config),
+    exports: {
+      objects: blobs,
+      ledger: new SqlExportLedger(db, db),
+      signingSecret: env.EXPORT_SIGNING_SECRET ?? null,
+      prefix: env.EXPORT_PREFIX ?? 'exports/',
+    },
     cache: new WorkersResponseCache(caches.default),
     logger: new ConsoleLogger(),
     waitUntil: (p) => ctx.waitUntil(p),

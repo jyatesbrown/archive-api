@@ -1,9 +1,11 @@
 /** D1 / R2 bindings for SqlClient / BlobReader. Not unit-tested (needs the Workers runtime). */
 import type { BlobReader, SqlClient, SqlValue } from './sql-store.js';
 
+import type { SqlWriter } from '../auth/lemonsqueezy.js';
 import type { Meter } from '../auth/meter.js';
+import type { ExportObject, ObjectReader, SqlRunner } from '../export.js';
 
-export class D1Client implements SqlClient {
+export class D1Client implements SqlClient, SqlRunner, SqlWriter {
   constructor(private readonly db: D1Database) {}
   async all<T>(sql: string, params: readonly SqlValue[]): Promise<T[]> {
     const res = await this.db
@@ -19,7 +21,7 @@ export class D1Client implements SqlClient {
       .first<T & Record<string, unknown>>();
     return row ?? null;
   }
-  /** Writes are reserved for the billing webhook; the query path never calls this. */
+  /** Writes are confined to the billing webhook and the bulk_exports ledger; the archive tables stay read-only. */
   async run(sql: string, params: readonly SqlValue[]): Promise<void> {
     await this.db
       .prepare(sql)
@@ -28,11 +30,16 @@ export class D1Client implements SqlClient {
   }
 }
 
-export class R2Reader implements BlobReader {
+export class R2Reader implements BlobReader, ObjectReader {
   constructor(private readonly bucket: R2Bucket) {}
   async text(key: string): Promise<string | null> {
     const obj = await this.bucket.get(key);
     return obj ? obj.text() : null;
+  }
+  async get(key: string): Promise<ExportObject | null> {
+    const obj = await this.bucket.get(key);
+    if (!obj) return null;
+    return { body: obj.body, size: obj.size, etag: obj.httpEtag, contentType: obj.httpMetadata?.contentType ?? null };
   }
 }
 
