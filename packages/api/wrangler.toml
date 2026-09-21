@@ -14,6 +14,9 @@ PAYLOAD_PREFIX = "payloads/"
 PRICING_URL = "https://archive-api.dev/pricing"
 # Merchant of record adapter; only "noop" exists until the account is set up.
 BILLING_PROVIDER = "noop"
+# Key prefix of published Parquet exports (scripts/export-parquet.ts + its upload.sh).
+# Bulk export also needs the secret EXPORT_SIGNING_SECRET (wrangler secret put); unset = endpoint answers 503.
+EXPORT_PREFIX = "exports/"
 
 [[d1_databases]]
 binding = "DB"

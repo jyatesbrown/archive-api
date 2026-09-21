@@ -2,9 +2,17 @@
 import type { BlobReader, SqlClient, SqlValue } from './sql-store.js';
 
 import type { Meter } from '../auth/meter.js';
+import type { ExportObject, ObjectReader, SqlRunner } from '../export.js';
 
-export class D1Client implements SqlClient {
+export class D1Client implements SqlClient, SqlRunner {
   constructor(private readonly db: D1Database) {}
+  /** Writes are confined to the bulk_exports ledger; the archive tables stay read-only. */
+  async run(sql: string, params: readonly SqlValue[]): Promise<void> {
+    await this.db
+      .prepare(sql)
+      .bind(...params)
+      .run();
+  }
   async all<T>(sql: string, params: readonly SqlValue[]): Promise<T[]> {
     const res = await this.db
       .prepare(sql)
@@ -21,11 +29,16 @@ export class D1Client implements SqlClient {
   }
 }
 
-export class R2Reader implements BlobReader {
+export class R2Reader implements BlobReader, ObjectReader {
   constructor(private readonly bucket: R2Bucket) {}
   async text(key: string): Promise<string | null> {
     const obj = await this.bucket.get(key);
     return obj ? obj.text() : null;
+  }
+  async get(key: string): Promise<ExportObject | null> {
+    const obj = await this.bucket.get(key);
+    if (!obj) return null;
+    return { body: obj.body, size: obj.size, etag: obj.httpEtag, contentType: obj.httpMetadata?.contentType ?? null };
   }
 }
 

@@ -15,6 +15,8 @@ The Worker is read-only: D1 holds the harness index tables (`sources`,
 | `GET /v1/{source}/asof?key=K&date=D` | state of K on D: `exact` / `carried_forward` / `absent` / `unknown_gap` | immutable when D ≤ last capture, else 60s |
 | `GET /v1/{source}/diff?from=D1&to=D2[&limit=N][&cursor=C][&include=payload]` | added / removed / mutated / aged_out between two captures | immutable |
 | `GET /v1/{source}/history?key=K` | full timeline of K with first/last seen, gaps, reuse evidence | 60s |
+| `GET /v1/{source}/export` | Team/Bulk: signed download links for the latest published Parquet dump | `no-store` |
+| `GET /v1/{source}/export/{stamp}/{file}?exp=&sig=` | the download itself; the signature is the credential (no key, unmetered) | `private, no-store` |
 
 Every 200 body carries `provenance` (`source.{id,name,upstreamUrl}` and the
 contributing `captures[]` with `fetchedAt`, `contentHash` (sha256 of the raw
@@ -24,7 +26,42 @@ Errors are RFC 9457 `application/problem+json` with a stable `code`:
 `missing_parameter`, `invalid_parameter`, `invalid_cursor`, `unknown_source`,
 `not_found`, `method_not_allowed`, `no_capture` (422, with `nearest_before`,
 `nearest_after`, `rejected_on_date`), `invalid_key` (401), `lookback_exceeded`
-(402), `quota_exhausted` (429, anonymous only), `internal`.
+(402), `quota_exhausted` (429, anonymous only), `export_not_included` (402),
+`export_exhausted` (409), `export_unavailable` (404), `export_unconfigured`
+(503), `invalid_signature` (403), `link_expired` (410), `internal`.
+
+## Bulk export (Parquet)
+
+The dump is produced offline from the harness SQLite + payload directory and
+uploaded to R2; the Worker only entitles, signs and streams.
+
+```
+pnpm --filter @archive-api/api export:parquet -- --db /path/harness.sqlite \
+  --payloads /path/payloads --source <name> --out /tmp/exports/<name>
+bash /tmp/exports/<name>/upload.sh            # wrangler r2 object put under exports/<name>/
+```
+
+Output per run, under `<out>/<stamp>/` where `stamp = <fetched_at>-<sha12>` of
+the last ok capture (re-running on unchanged data yields the same stamp and
+byte-identical files):
+
+- `history.parquet` — one row per transition, the same events `history()`
+  reports: `record_key, event (appeared|mutated|removed|aged_out|reappeared),
+  snapshot_id, chain_index, captured_at, capture_date, value_hash, payload
+  (JSON, present unless removed), content_hash`.
+- `snapshots.parquet` — one row per capture, failed ones included
+  (`outcome`, `content_hash`, `prev_hash`, `raw_path`, `byte_length`,
+  `record_count`), so gaps stay visible instead of being flattened into absence.
+- `manifest.json` (also copied to `<out>/latest.json`) — source, capture bounds,
+  `chain_head`, row counts, and `sha256`/`bytes` per file. Both Parquet files
+  carry the same provenance in their key-value metadata.
+
+`GET /v1/{source}/export` reads `exports/<source>/latest.json`, checks the
+caller's allowance against the `bulk_exports` ledger (`contract/exports.sql`;
+the only table the Worker writes), records the grant, and returns per-file
+URLs signed with HMAC-SHA256 over `source\nstamp\nfile\nexp` (7-day TTL).
+Allowances: `bulk` = one export ever, `team` = one per calendar quarter; asking
+again for the *same* stamp re-signs the links without consuming anything.
 
 ## Auth, metering, lookback
 
@@ -95,6 +132,8 @@ contents never appear, and neither do keys: only the `ak_live_xxxxxxxx` prefix.
   `openArchive: true` lifts the lookback window for that source for every
   tier (sample data for the docs console); metering still applies.
 - `PRICING_URL`, `BILLING_PROVIDER` (`noop`).
+- `EXPORT_PREFIX` (default `exports/`) and the secret `EXPORT_SIGNING_SECRET`
+  (`wrangler secret put`); without the secret both export routes answer 503.
 
 The `database_id` / `bucket_name` in `wrangler.toml` are placeholders until
 resources are provisioned (RUNBOOK, Task 5).

@@ -18,6 +18,7 @@ import type { Usage } from './auth/meter.js';
 import { TIERS } from './auth/tiers.js';
 import { IMMUTABLE, NO_STORE, SHORT, cacheKey, type ResponseCache } from './cache.js';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, decodeCursor, pageOf, type DiffEntry } from './cursor.js';
+import { DEFAULT_EXPORT_PREFIX, grantExport, objectKey, verifyLink, type ExportDeps } from './export.js';
 import type { Logger, RequestLog } from './logging.js';
 import { PROBLEM_CODE_HEADER, problem, type ProblemCode } from './problem.js';
 import type { SourceRegistry } from './registry.js';
@@ -37,6 +38,8 @@ export interface AppDeps {
   /** Defer work past the response (Workers `ctx.waitUntil`). Defaults to awaiting inline. */
   waitUntil?: (p: Promise<unknown>) => void;
   now?: () => Date;
+  /** Bulk export delivery (see ./export.ts). Absent → the export endpoints answer 503. */
+  exports?: ExportDeps;
 }
 
 export interface App {
@@ -106,6 +109,8 @@ export function createApp(deps: AppDeps): App {
         response = problem('not_found', 404, `No such endpoint: ${url.pathname}`, url.pathname);
       } else if (routed.endpoint === 'health') {
         response = await health();
+      } else if (routed.endpoint === 'export_file') {
+        response = await serveExportFile(routed, ctx, at);
       } else {
         const auth = await authenticate(request, deps.auth.keys, url.pathname);
         if (!auth.ok) {
@@ -131,7 +136,7 @@ export function createApp(deps: AppDeps): App {
                 response = new Response(hit.body, hit);
               } else {
                 cacheState = 'miss';
-                const h = await dispatch(routed, ctx);
+                const h = await dispatch(routed, ctx, at);
                 response = h.response;
                 if (h.cacheable && response.headers.get('cache-control') !== NO_STORE) {
                   waitUntil(deps.cache.put(key, response.clone()));
@@ -199,7 +204,7 @@ export function createApp(deps: AppDeps): App {
     return earliest === null ? {} : { since: earliest };
   }
 
-  async function dispatch(r: Route, ctx: Ctx): Promise<Handled> {
+  async function dispatch(r: Route, ctx: Ctx, at: Date): Promise<Handled> {
     if (r.endpoint === 'sources') {
       const list = await deps.registry.list();
       return { response: json({ sources: list }, SHORT), cacheable: true };
@@ -219,6 +224,8 @@ export function createApp(deps: AppDeps): App {
           return await handleDiff(store, ctx);
         case 'history':
           return await handleHistory(store, ctx, r);
+        case 'export':
+          return await handleExport(store, ctx, at);
       }
     } catch (err) {
       if (err instanceof NoCaptureError) {
@@ -341,6 +348,98 @@ export function createApp(deps: AppDeps): App {
     return { response: json(body, IMMUTABLE), cacheable: true };
   }
 
+  /**
+   * Entitle the caller to the source's published export and hand back signed
+   * links. Never cached: the body is per-key and the grant is a side effect.
+   */
+  async function handleExport(store: SnapshotStore, ctx: Ctx, at: Date): Promise<Handled> {
+    const fail = (response: Response): Handled => ({ response, cacheable: false });
+    const source = store.source.name;
+    const p = ctx.principal;
+    if (TIERS[p.tier].bulkExport === 'none' || p.keyId === null) {
+      const up = { tier: 'bulk' as const, checkoutUrl: await deps.auth.billing.checkoutUrl('bulk', p.keyId), pricingUrl: deps.auth.billing.pricingUrl() };
+      return fail(
+        problem('export_not_included', 402, `The ${p.tier} tier has no bulk export; the bulk tier buys one full-history Parquet dump of a source.`, ctx.url.pathname, {
+          tier: p.tier,
+          upgrade: up,
+        }),
+      );
+    }
+    if (!deps.exports) return fail(problem('export_unconfigured', 503, 'EXPORT_SIGNING_SECRET is not set', ctx.url.pathname));
+    const out = await grantExport(deps.exports, { ...p, keyId: p.keyId }, source, at);
+    switch (out.kind) {
+      case 'unconfigured':
+        return fail(problem('export_unconfigured', 503, 'EXPORT_SIGNING_SECRET is not set', ctx.url.pathname));
+      case 'unavailable':
+        return fail(problem('export_unavailable', 404, `No Parquet export has been published for '${source}' yet`, ctx.url.pathname, { source }));
+      case 'not_included':
+        return fail(problem('export_not_included', 402, `The ${p.tier} tier has no bulk export`, ctx.url.pathname, { tier: p.tier }));
+      case 'exhausted':
+        return fail(
+          problem(
+            'export_exhausted',
+            409,
+            TIERS[p.tier].bulkExport === 'once'
+              ? 'This key has already claimed its one-off export; re-requesting the same export re-signs its links, a different one needs a new purchase.'
+              : `This key has already claimed its export for the current quarter; the allowance resets at ${out.resetsAt}.`,
+            ctx.url.pathname,
+            {
+              tier: p.tier,
+              allowance: TIERS[p.tier].bulkExport,
+              used: out.used.map((g) => ({ source: g.source, stamp: g.stamp, issued_at: g.issuedAt })),
+              resets_at: out.resetsAt,
+              upgrade: { pricing_url: deps.auth.billing.pricingUrl() },
+            },
+          ),
+        );
+      case 'granted': {
+        const m = out.manifest;
+        const body = {
+          source,
+          stamp: m.stamp,
+          schema_version: m.schema_version,
+          generated_at: m.generated_at,
+          chain_head: m.chain_head,
+          license_url: m.source.license_url,
+          captures: m.captures,
+          rows: m.rows,
+          grant: { issued_at: out.grant.issuedAt, repeat: out.repeat, allowance: TIERS[p.tier].bulkExport },
+          links_expire_at: out.expiresAt,
+          files: out.files,
+        };
+        return fail(json(body, NO_STORE));
+      }
+    }
+  }
+
+  /** Signed-link download: the URL is the credential, so no key and no meter. */
+  async function serveExportFile(r: Route, ctx: Ctx, at: Date): Promise<Response> {
+    const path = ctx.url.pathname;
+    if (!deps.exports?.signingSecret) return problem('export_unconfigured', 503, 'EXPORT_SIGNING_SECRET is not set', path);
+    const { source, stamp, file } = r as ExportFileRoute;
+    const check = await verifyLink(
+      deps.exports.signingSecret,
+      source,
+      stamp,
+      file,
+      ctx.url.searchParams.get('exp'),
+      ctx.url.searchParams.get('sig'),
+      Math.floor(at.getTime() / 1000),
+    );
+    if (check === 'expired') return problem('link_expired', 410, 'Request GET /v1/{source}/export again with your API key for fresh links', path);
+    if (check !== 'ok') return problem('invalid_signature', 403, 'The exp/sig query parameters do not match this path', path);
+    const obj = await deps.exports.objects.get(objectKey(deps.exports.prefix ?? DEFAULT_EXPORT_PREFIX, source, stamp, file));
+    if (!obj) return problem('not_found', 404, 'The export file is no longer stored', path);
+    const headers = new Headers({
+      'content-type': obj.contentType ?? 'application/octet-stream',
+      'content-length': String(obj.size),
+      'content-disposition': `attachment; filename="${source}-${stamp}-${file}"`,
+      'cache-control': 'private, no-store',
+    });
+    if (obj.etag) headers.set('etag', obj.etag);
+    return new Response(obj.body, { status: 200, headers });
+  }
+
   async function fillHashes(store: SnapshotStore, result: DiffResult, entries: DiffEntry[]): Promise<void> {
     const needBefore = entries.filter((e) => e.category === 'removed' || e.category === 'aged_out');
     const needAfter = entries.filter((e) => e.category === 'added');
@@ -402,17 +501,28 @@ function truncateHistory(h: HistoryResult, earliest: string): HistoryResult {
   };
 }
 
-type Endpoint = 'health' | 'sources' | 'asof' | 'diff' | 'history';
+type Endpoint = 'health' | 'sources' | 'asof' | 'diff' | 'history' | 'export' | 'export_file';
 interface Route {
   endpoint: Endpoint;
   source: string | null;
+}
+interface ExportFileRoute extends Route {
+  endpoint: 'export_file';
+  source: string;
+  stamp: string;
+  file: string;
 }
 
 export function route(pathname: string): Route | null {
   const p = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
   if (p === '/health') return { endpoint: 'health', source: null };
   if (p === '/v1/sources') return { endpoint: 'sources', source: null };
-  const m = /^\/v1\/([^/]+)\/(asof|diff|history)$/.exec(p);
+  const f = /^\/v1\/([^/]+)\/export\/([A-Za-z0-9_-]+)\/([A-Za-z0-9._-]+)$/.exec(p);
+  if (f) {
+    const r: ExportFileRoute = { endpoint: 'export_file', source: decodeURIComponent(f[1] as string), stamp: f[2] as string, file: f[3] as string };
+    return r;
+  }
+  const m = /^\/v1\/([^/]+)\/(asof|diff|history|export)$/.exec(p);
   if (!m) return null;
   return { endpoint: m[2] as Endpoint, source: decodeURIComponent(m[1] as string) };
 }
