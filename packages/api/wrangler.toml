@@ -1,0 +1,34 @@
+name = "archive-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[vars]
+# JSON: { "<source name>": { "entityFields": ["field", ...] } }
+SOURCE_CONFIG = '{"fixture_registry":{"entityFields":["entity"],"openArchive":true}}'
+# Key prefix under which the harness syncs raw payloads (deploy/run_daily.sh).
+PAYLOAD_PREFIX = "payloads/"
+PRICING_URL = "https://archive-api.dev/pricing"
+# Merchant of record adapter; only "noop" exists until the account is set up.
+BILLING_PROVIDER = "noop"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "archive-index"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[r2_buckets]]
+binding = "PAYLOADS"
+bucket_name = "archive-store"
+
+# Per-key monthly call counters (see src/stores/cloudflare.ts MonthlyCounter).
+[[durable_objects.bindings]]
+name = "METER"
+class_name = "MonthlyCounter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MonthlyCounter"]

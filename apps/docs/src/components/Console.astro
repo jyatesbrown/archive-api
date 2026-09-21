@@ -1,0 +1,133 @@
+---
+/**
+ * Live query console. Runs in the browser against the real API with no key:
+ * the fixture source is an open archive, so the anonymous tier gets a real
+ * answer (100 calls/month per address; the headers show the meter).
+ */
+import { API_URL } from '../config/site';
+import type { SourceDoc } from '../config/sources';
+
+interface Props {
+  source: SourceDoc;
+  id?: string;
+}
+const { source, id = 'console' } = Astro.props;
+const s = source.sample;
+const initialUrl = `${API_URL}/v1/${source.name}/asof?key=${encodeURIComponent(s.key)}&date=${s.date}`;
+---
+
+<section class="console card" id={id} data-api={API_URL} data-source={source.name}>
+  <div class="tabs" role="tablist" aria-label="Endpoint">
+    <button type="button" role="tab" data-ep="asof" aria-selected="true">asof</button>
+    <button type="button" role="tab" data-ep="diff" aria-selected="false">diff</button>
+    <button type="button" role="tab" data-ep="history" aria-selected="false">history</button>
+  </div>
+  <form>
+    <label data-for="asof history">key <input name="key" value={s.key} spellcheck="false" /></label>
+    <label data-for="asof">date <input name="date" value={s.date} pattern="\d{4}-\d{2}-\d{2}" /></label>
+    <label data-for="diff" hidden>from <input name="from" value={s.from} pattern="\d{4}-\d{2}-\d{2}" /></label>
+    <label data-for="diff" hidden>to <input name="to" value={s.to} pattern="\d{4}-\d{2}-\d{2}" /></label>
+    <label data-for="diff" hidden>limit <input name="limit" value="20" inputmode="numeric" /></label>
+    <label>
+      API key <span class="muted">(optional)</span>
+      <input name="apikey" placeholder="none — anonymous tier" autocomplete="off" />
+    </label>
+    <button type="submit" class="run">Run</button>
+  </form>
+  <p class="status">
+    <code class="url">{initialUrl}</code>
+  </p>
+  <pre><code class="out">Press Run.</code></pre>
+  <p class="muted">{s.note}</p>
+</section>
+
+<script>
+  type Params = Record<string, string>;
+
+  function setup(root: HTMLElement): void {
+    const api = root.dataset['api'] ?? '';
+    const source = root.dataset['source'] ?? '';
+    const form = root.querySelector('form') as HTMLFormElement;
+    const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role=tab]'));
+    const urlEl = root.querySelector('.url') as HTMLElement;
+    const out = root.querySelector('.out') as HTMLElement;
+    const status = root.querySelector('.status') as HTMLElement;
+    let endpoint = 'asof';
+
+    const fields: Record<string, string[]> = {
+      asof: ['key', 'date'],
+      diff: ['from', 'to', 'limit'],
+      history: ['key'],
+    };
+
+    function buildUrl(): string {
+      const data = new FormData(form);
+      const params: Params = {};
+      for (const f of fields[endpoint] ?? []) {
+        const v = String(data.get(f) ?? '').trim();
+        if (v) params[f] = v;
+      }
+      return `${api}/v1/${source}/${endpoint}?${new URLSearchParams(params).toString()}`;
+    }
+
+    function refresh(): void {
+      for (const label of form.querySelectorAll<HTMLLabelElement>('label[data-for]')) {
+        label.hidden = !(label.dataset['for'] ?? '').split(' ').includes(endpoint);
+      }
+      urlEl.textContent = buildUrl();
+    }
+
+    for (const t of tabs) {
+      t.addEventListener('click', () => {
+        endpoint = t.dataset['ep'] ?? 'asof';
+        for (const o of tabs) o.setAttribute('aria-selected', String(o === t));
+        refresh();
+      });
+    }
+    form.addEventListener('input', refresh);
+
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const url = buildUrl();
+      urlEl.textContent = url;
+      out.textContent = '…';
+      const key = String(new FormData(form).get('apikey') ?? '').trim();
+      const headers: Record<string, string> = { accept: 'application/json' };
+      if (key) headers['authorization'] = `Bearer ${key}`;
+      const started = performance.now();
+      try {
+        const res = await fetch(url, { headers });
+        const ms = Math.round(performance.now() - started);
+        const text = await res.text();
+        let pretty = text;
+        try {
+          pretty = JSON.stringify(JSON.parse(text), null, 2);
+        } catch {
+          /* not JSON; show as-is */
+        }
+        out.textContent = pretty;
+        const cls = res.ok ? 'ok' : res.status === 402 || res.status === 429 ? 'warn' : 'bad';
+        const meter = res.headers.get('x-ratelimit-used');
+        const tier = res.headers.get('x-tier');
+        const cache = res.headers.get('x-cache');
+        const bits = [
+          `<span class="${cls}">HTTP ${res.status}</span>`,
+          `${ms} ms`,
+          tier ? `tier ${tier}` : '',
+          meter ? `${meter}/${res.headers.get('x-ratelimit-limit') ?? '∞'} calls this month` : '',
+          cache ? `cache ${cache}` : '',
+        ].filter(Boolean);
+        status.innerHTML = `${bits.join(' · ')}<br><code class="url"></code>`;
+        (status.querySelector('.url') as HTMLElement).textContent = url;
+      } catch (err) {
+        out.textContent = `Request failed: ${err instanceof Error ? err.message : String(err)}\n\nIs ${api} reachable from this page?`;
+        status.innerHTML = `<span class="bad">network error</span><br><code class="url"></code>`;
+        (status.querySelector('.url') as HTMLElement).textContent = url;
+      }
+    });
+
+    refresh();
+  }
+
+  document.querySelectorAll<HTMLElement>('section.console').forEach(setup);
+</script>
