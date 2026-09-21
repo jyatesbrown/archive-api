@@ -12,7 +12,8 @@
     "coverage": "vitest run --coverage",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "fixture:load": "node --experimental-strip-types scripts/load-fixture.ts"
+    "fixture:load": "node --experimental-strip-types scripts/load-fixture.ts",
+    "key:mint": "pnpm build && node --experimental-strip-types scripts/mint-key.ts"
   },
   "dependencies": {
     "@archive-api/engine": "workspace:*"

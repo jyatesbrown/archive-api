@@ -7,10 +7,15 @@ import {
   type AsOfResult,
   type Capture,
   type DiffResult,
+  type HistoryResult,
   type JsonValue,
   type SnapshotStore,
 } from '@archive-api/engine';
 
+import { isBillableBoundary } from './auth/billing.js';
+import { authenticate, earliestAllowed, lookbackProblem, meterCall, usageHeaders, type AuthDeps, type Principal } from './auth/guard.js';
+import type { Usage } from './auth/meter.js';
+import { TIERS } from './auth/tiers.js';
 import { IMMUTABLE, NO_STORE, SHORT, cacheKey, type ResponseCache } from './cache.js';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, decodeCursor, pageOf, type DiffEntry } from './cursor.js';
 import type { Logger, RequestLog } from './logging.js';
@@ -23,6 +28,7 @@ export interface AppDeps {
   registry: SourceRegistry;
   cache: ResponseCache;
   logger: Logger;
+  auth: AuthDeps;
   /** Defer work past the response (Workers `ctx.waitUntil`). Defaults to awaiting inline. */
   waitUntil?: (p: Promise<unknown>) => void;
   now?: () => Date;
@@ -38,7 +44,12 @@ interface Ctx {
   source: string | null;
   recordKey: string | null;
   endpoint: string;
+  principal: Principal;
+  /** UTC calendar date of the request; lookback windows are measured from here. */
+  today: string;
 }
+
+const ANONYMOUS: Principal = { tier: 'anonymous', subject: 'anon:none', keyId: null, keyPrefix: null };
 
 interface Handled {
   response: Response;
@@ -62,14 +73,18 @@ export function createApp(deps: AppDeps): App {
     const deferred: Promise<unknown>[] = [];
     const waitUntil = deps.waitUntil ?? ((p: Promise<unknown>) => void deferred.push(p));
     const url = new URL(request.url);
+    const at = now();
     const ctx: Ctx = {
       url,
       requestId: crypto.randomUUID(),
       source: null,
       recordKey: null,
       endpoint: url.pathname,
+      principal: ANONYMOUS,
+      today: at.toISOString().slice(0, 10),
     };
     let cacheState: RequestLog['cache'] = 'bypass';
+    let usage: Usage | null = null;
     let response: Response;
     try {
       const routed = route(url.pathname);
@@ -87,20 +102,41 @@ export function createApp(deps: AppDeps): App {
       } else if (routed.endpoint === 'health') {
         response = await health();
       } else {
-        const key = cacheKey(url);
-        const hit = await deps.cache.match(key);
-        if (hit) {
-          cacheState = 'hit';
-          response = new Response(hit.body, hit);
+        const auth = await authenticate(request, deps.auth.keys, url.pathname);
+        if (!auth.ok) {
+          response = auth.response;
         } else {
-          cacheState = 'miss';
-          const h = await dispatch(routed, ctx);
-          response = h.response;
-          if (h.cacheable && response.headers.get('cache-control') !== NO_STORE) {
-            waitUntil(deps.cache.put(key, response.clone()));
+          ctx.principal = auth.principal;
+          const metered = await meterCall(ctx.principal, deps.auth, at, url.pathname);
+          usage = metered.usage;
+          if (metered.blocked) {
+            response = metered.blocked;
+          } else {
+            if (ctx.principal.keyId !== null && isBillableBoundary(usage)) {
+              waitUntil(deps.auth.billing.reportUsage(ctx.principal.keyId, usage));
+            }
+            const denied = await lookbackGate(routed, ctx);
+            if (denied) {
+              response = denied;
+            } else {
+              const key = cacheKey(url, cacheVariant(routed, ctx));
+              const hit = await deps.cache.match(key);
+              if (hit) {
+                cacheState = 'hit';
+                response = new Response(hit.body, hit);
+              } else {
+                cacheState = 'miss';
+                const h = await dispatch(routed, ctx);
+                response = h.response;
+                if (h.cacheable && response.headers.get('cache-control') !== NO_STORE) {
+                  waitUntil(deps.cache.put(key, response.clone()));
+                }
+              }
+              response.headers.set('x-cache', cacheState === 'hit' ? 'HIT' : 'MISS');
+            }
           }
         }
-        response.headers.set('x-cache', cacheState === 'hit' ? 'HIT' : 'MISS');
+        if (usage) usageHeaders(response, usage);
       }
     } catch (err) {
       response = internal(err, ctx);
@@ -117,8 +153,8 @@ export function createApp(deps: AppDeps): App {
       status: response.status,
       latency_ms: Date.now() - started,
       cache: cacheState,
-      tier: 'anonymous',
-      key_prefix: null,
+      tier: ctx.principal.tier,
+      key_prefix: ctx.principal.keyPrefix,
       problem: response.headers.get('content-type')?.startsWith('application/problem+json') ? problemCode(response) : null,
     });
     await Promise.all(deferred);
@@ -128,6 +164,28 @@ export function createApp(deps: AppDeps): App {
   async function health(): Promise<Response> {
     const sources = await deps.registry.list();
     return json({ status: 'ok', version: API_VERSION, sources: sources.length, time: now().toISOString() }, NO_STORE);
+  }
+
+  /**
+   * Refuse, before touching the cache or the store, any request whose dates
+   * reach past the caller's window. History has no date parameter; it is
+   * truncated in the handler instead and flagged in the body.
+   */
+  async function lookbackGate(r: Route, ctx: Ctx): Promise<Response | null> {
+    const params = r.endpoint === 'asof' ? ['date'] : r.endpoint === 'diff' ? ['from', 'to'] : [];
+    for (const p of params) {
+      const v = ctx.url.searchParams.get(p);
+      if (v === null) continue;
+      const denied = await lookbackProblem(ctx.principal, v, p, ctx.today, ctx.url.pathname, deps.auth.billing);
+      if (denied) return denied;
+    }
+    return null;
+  }
+
+  function cacheVariant(r: Route, ctx: Ctx): Record<string, string> {
+    if (r.endpoint !== 'history') return {};
+    const earliest = earliestAllowed(ctx.principal.tier, ctx.today);
+    return earliest === null ? {} : { since: earliest };
   }
 
   async function dispatch(r: Route, ctx: Ctx): Promise<Handled> {
@@ -184,9 +242,22 @@ export function createApp(deps: AppDeps): App {
   async function handleHistory(store: SnapshotStore, ctx: Ctx): Promise<Handled> {
     const key = required(ctx, 'key');
     if (typeof key !== 'string') return { response: key, cacheable: false };
-    const result = await history(store, key);
+    const full = await history(store, key);
+    const earliest = earliestAllowed(ctx.principal.tier, ctx.today);
+    const result = earliest === null ? full : truncateHistory(full, earliest);
+    const lookback =
+      earliest === null
+        ? { limited: false as const }
+        : {
+            limited: true as const,
+            tier: ctx.principal.tier,
+            lookback_days: TIERS[ctx.principal.tier].lookbackDays,
+            earliest_allowed: earliest,
+            omitted_transitions: full.transitions.length - result.transitions.length,
+            upgrade: { pricing_url: deps.auth.billing.pricingUrl() },
+          };
     // The spine grows with every capture; only ever cache briefly.
-    return { response: json({ source: store.source.name, ...result }, SHORT), cacheable: true };
+    return { response: json({ source: store.source.name, ...result, lookback }, SHORT), cacheable: true };
   }
 
   async function handleDiff(store: SnapshotStore, ctx: Ctx): Promise<Handled> {
@@ -299,6 +370,25 @@ export function createApp(deps: AppDeps): App {
   }
 
   return { fetch: handle };
+}
+
+/**
+ * Drop everything the tier may not see. `firstSeen` is withheld (not moved) when
+ * it predates the window: reporting a later date as "first seen" would be a lie.
+ */
+function truncateHistory(h: HistoryResult, earliest: string): HistoryResult {
+  const inWindow = (d: string): boolean => d >= earliest;
+  const reuseEvidence = h.reuseEvidence.filter((e) => inWindow(e.at.date));
+  return {
+    ...h,
+    reused: h.reused && reuseEvidence.length > 0,
+    firstSeen: h.firstSeen && inWindow(h.firstSeen.date) ? h.firstSeen : null,
+    lastSeen: h.lastSeen && inWindow(h.lastSeen.date) ? h.lastSeen : null,
+    transitions: h.transitions.filter((t) => inWindow(t.capture.date)),
+    gaps: h.gaps.filter((g) => inWindow(g.to)),
+    reuseEvidence,
+    provenance: { ...h.provenance, captures: h.provenance.captures.filter((c) => inWindow(c.date)) },
+  };
 }
 
 type Endpoint = 'health' | 'sources' | 'asof' | 'diff' | 'history';

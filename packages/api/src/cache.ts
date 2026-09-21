@@ -9,9 +9,15 @@ export interface ResponseCache {
   put(key: string, response: Response): Promise<void>;
 }
 
-/** Deterministic cache key: path + query with sorted parameter names. */
-export function cacheKey(url: URL): string {
-  const params = [...url.searchParams.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+/**
+ * Deterministic cache key: path + query with sorted parameter names. `variant`
+ * is appended for answers whose body legitimately differs by plan (a
+ * lookback-truncated history) so a limited answer is never served to a full one.
+ */
+export function cacheKey(url: URL, variant: Readonly<Record<string, string>> = {}): string {
+  const params = [...url.searchParams.entries(), ...Object.entries(variant).map(([k, v]) => [`__${k}`, v] as [string, string])].sort(
+    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
+  );
   const qs = new URLSearchParams(params).toString();
   return `${url.origin}${url.pathname}${qs ? `?${qs}` : ''}`;
 }

@@ -224,3 +224,29 @@ describe('cache policy over the fixture', () => {
     expect((await t.get(q('asof', { key: c.key, date: '2099-01-01' }))).headers.get('cache-control')).toBe(SHORT);
   });
 });
+
+describe('free tier over the fixture', () => {
+  it('sees the last 90 days of the archive and is told, with the upgrade path, about the rest', async () => {
+    // "Today" is the day after the final capture, so the window is the tail of the fixture.
+    const last = fx.manifest.dates[fx.manifest.dates.length - 1] as string;
+    const today = new Date(`${last}T12:00:00Z`);
+    today.setUTCDate(today.getUTCDate() + 1);
+    const ft = appFor(fx.registry, () => today);
+    const k = await ft.mint('free');
+    const h = { authorization: `Bearer ${k.plaintext}` };
+    const c = fx.manifest.cases.resurrect;
+
+    const old = await ft.get(q('asof', { key: c.key, date: date(0) }), { headers: h });
+    expect(old.status).toBe(402);
+    expect(await body(old)).toMatchObject({ code: 'lookback_exceeded', tier: 'free', lookback_days: 90, upgrade: { tier: 'indie' } });
+
+    const recent = await ft.get(q('asof', { key: c.key, date: last }), { headers: h });
+    expect(recent.status).toBe(200);
+    expect(recent.headers.get('x-tier')).toBe('free');
+    expect(recent.headers.get('x-ratelimit-used')).toBe('2');
+
+    const full = await ft.get(q('asof', { key: c.key, date: date(0) })); // team key
+    expect(full.status).toBe(200);
+    expect((await body<{ resolution: string }>(full)).resolution).toBe('exact');
+  });
+});
