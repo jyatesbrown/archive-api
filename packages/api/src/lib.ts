@@ -12,3 +12,4 @@ export * from './logging.js';
 export * from './problem.js';
 export * from './registry.js';
 export * from './stores/sql-store.js';
+export * from './auth/lemonsqueezy.js';

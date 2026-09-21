@@ -19,6 +19,13 @@ export class D1Client implements SqlClient {
       .first<T & Record<string, unknown>>();
     return row ?? null;
   }
+  /** Writes are reserved for the billing webhook; the query path never calls this. */
+  async run(sql: string, params: readonly SqlValue[]): Promise<void> {
+    await this.db
+      .prepare(sql)
+      .bind(...params)
+      .run();
+  }
 }
 
 export class R2Reader implements BlobReader {

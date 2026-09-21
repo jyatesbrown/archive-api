@@ -57,9 +57,12 @@ allowed and treated as `anonymous`; a bad key is 401, never a silent downgrade.
   different cache entries.
 - Billing (`src/auth/billing.ts`): `BillingProvider { reportUsage, checkoutUrl,
   pricingUrl }`. `reportUsage` is called off the request path exactly when a key
-  crosses its allowance and at each further 1,000 calls. `NoopBilling` is the
-  only implementation until the merchant-of-record account exists; select with
-  `BILLING_PROVIDER`.
+  crosses its allowance and at each further 1,000 calls. Implementations:
+  `NoopBilling` (records in memory) and `LemonSqueezyBilling`
+  (`src/auth/lemonsqueezy.ts`: static checkout links carrying the key id,
+  usage records with `action: set`, signed webhook at
+  `POST /billing/lemonsqueezy/webhook` that links subscriptions to keys and
+  moves `api_keys.tier`). Select with `BILLING_PROVIDER`; see RUNBOOK §4.5.
 
 ### Diff paging
 
@@ -94,7 +97,10 @@ contents never appear, and neither do keys: only the `ak_live_xxxxxxxx` prefix.
   used to tell key reuse from resurrection.
   `openArchive: true` lifts the lookback window for that source for every
   tier (sample data for the docs console); metering still applies.
-- `PRICING_URL`, `BILLING_PROVIDER` (`noop`).
+- `PRICING_URL`, `BILLING_PROVIDER` (`noop` | `lemonsqueezy`).
+- Lemon Squeezy only: vars `LEMONSQUEEZY_STORE`, `LEMONSQUEEZY_VARIANTS`
+  (`{"indie":"<variant id>",...}`); secrets `LEMONSQUEEZY_API_KEY`,
+  `LEMONSQUEEZY_WEBHOOK_SECRET`; table from `contract/billing.sql`.
 
 The `database_id` / `bucket_name` in `wrangler.toml` are placeholders until
 resources are provisioned (RUNBOOK, Task 5).
