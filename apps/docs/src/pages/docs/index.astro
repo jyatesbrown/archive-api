@@ -56,6 +56,11 @@ content-type: application/problem+json
   <p><code>firstSeen</code>, <code>lastSeen</code>, <code>status</code> (<code>present</code>, <code>removed</code>, <code>aged_out</code>), every <code>transitions[]</code> entry with before/after hashes, <code>gaps[]</code> (both <em>absent</em> and <em>no capture</em>, distinguished), and <code>reused</code> with <code>reuseEvidence[]</code> when the same key later identified a different entity.</p>
   <Examples path={`/v1/${demo.name}/history`} params={{ key: s.key }} />
 
+  <h2 id="export"><code>GET /v1/&lbrace;source&rbrace;/export</code></h2>
+  <p>Team and Bulk keys only. Returns signed, 7-day download links for the latest published Parquet dump of the whole source: <code>history.parquet</code> (one row per appear / mutate / remove / age-out / reappear, with the record payload) and <code>snapshots.parquet</code> (every capture, failed ones included, with content hashes). Bulk keys get one dump; Team keys one per calendar quarter. Re-requesting the same dump re-signs the links for free. Downloads need no key and are not metered.</p>
+  <pre><code>{`curl -sS -H "Authorization: Bearer $KEY" ${API_URL}/v1/${demo.name}/export | jq -r '.files[].url' \\
+  | while read -r u; do curl -sS -OJ "${API_URL}$u"; done`}</code></pre>
+
   <h2><code>GET /v1/sources</code></h2>
   <p>Every configured source with its upstream URL, publisher window, capture counts and first/last capture dates.</p>
   <pre><code>{`curl -sS ${API_URL}/v1/sources | jq .`}</code></pre>

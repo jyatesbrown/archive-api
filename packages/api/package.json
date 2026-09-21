@@ -13,7 +13,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "fixture:load": "node --experimental-strip-types scripts/load-fixture.ts",
-    "key:mint": "pnpm build && node --experimental-strip-types scripts/mint-key.ts"
+    "key:mint": "pnpm build && node --experimental-strip-types scripts/mint-key.ts",
+    "export:parquet": "pnpm build && node --experimental-strip-types scripts/export-parquet.ts"
   },
   "dependencies": {
     "@archive-api/engine": "workspace:*"
@@ -23,6 +24,8 @@
     "@cloudflare/workers-types": "5.20260911.1",
     "@types/node": "22.19.11",
     "@vitest/coverage-v8": "4.1.11",
+    "hyparquet": "1.30.1",
+    "hyparquet-writer": "0.16.9",
     "typescript": "5.7.2",
     "vitest": "4.1.11",
     "wrangler": "4.131.1"

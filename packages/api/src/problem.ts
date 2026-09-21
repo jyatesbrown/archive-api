@@ -15,6 +15,12 @@ export type ProblemCode =
   | 'invalid_key'
   | 'lookback_exceeded'
   | 'quota_exhausted'
+  | 'export_not_included'
+  | 'export_exhausted'
+  | 'export_unavailable'
+  | 'export_unconfigured'
+  | 'invalid_signature'
+  | 'link_expired'
   | 'internal';
 
 export interface Problem {
@@ -38,6 +44,12 @@ const TITLES: Record<ProblemCode, string> = {
   invalid_key: 'Invalid API key',
   lookback_exceeded: 'Requested date is outside your plan\'s lookback window',
   quota_exhausted: 'Monthly call allowance exhausted',
+  export_not_included: 'Bulk export is not included in your plan',
+  export_exhausted: 'Bulk export allowance already used',
+  export_unavailable: 'No export has been published for this source',
+  export_unconfigured: 'Bulk export is not enabled on this deployment',
+  invalid_signature: 'Download link signature is invalid',
+  link_expired: 'Download link has expired',
   internal: 'Internal error',
 };
 

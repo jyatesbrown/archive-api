@@ -12,6 +12,7 @@ import { MemoryKeyStore, mintKey, sha256Hex, type ApiKeyRecord } from '../src/au
 import { MemoryMeter } from '../src/auth/meter.js';
 import type { Tier } from '../src/auth/tiers.js';
 import { MemoryResponseCache } from '../src/cache.js';
+import type { ExportDeps } from '../src/export.js';
 import { MemoryLogger } from '../src/logging.js';
 import { StaticRegistry, type SourceRegistry } from '../src/registry.js';
 import { SqlRegistry, type BlobReader, type SqlClient, type SqlValue } from '../src/stores/sql-store.js';
@@ -107,6 +108,7 @@ export const TEAM_KEY = 'ak_test_teamteam_abcdefghjkmnpqrstuvwxyz23456789a';
 export interface AppOptions {
   now?: () => Date;
   openSources?: ReadonlySet<string>;
+  exports?: ExportDeps;
 }
 
 export function appFor(registry: SourceRegistry, nowOrOpts?: (() => Date) | AppOptions): TestApp {
@@ -124,6 +126,7 @@ export function appFor(registry: SourceRegistry, nowOrOpts?: (() => Date) | AppO
     auth,
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.openSources ? { openSources: opts.openSources } : {}),
+    ...(opts.exports ? { exports: opts.exports } : {}),
   });
   const ready = sha256Hex(TEAM_KEY).then((h) =>
     keys.add(h, { id: 'team-1', prefix: 'ak_test_teamteam', tier: 'team', owner: 'tests', createdAt: '2025-01-01T00:00:00Z', revokedAt: null }),
